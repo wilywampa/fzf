@@ -220,7 +220,10 @@ class TestFZF < MiniTest::Unit::TestCase
        ["juiceless", [[0, 1]]],
        ["juicily",   [[0, 1]]],
        ["juiciness", [[0, 1]]],
-       ["juicy",     [[0, 1]]]], matcher.match(list, 'j', '', '').sort)
+       ["juicy",     [[0, 1]]]], matcher.match(list, 'j').sort)
+    assert matcher.caches.empty?
+    matcher.cache list, 'j', matcher.match(list, 'j')
+
     assert !matcher.caches.empty?
     assert_equal [list.object_id], matcher.caches.keys
     assert_equal 1, matcher.caches[list.object_id].length
@@ -228,11 +231,13 @@ class TestFZF < MiniTest::Unit::TestCase
 
     assert_equal(
       [["juicily",   [[0, 5]]],
-       ["juiciness", [[0, 5]]]], matcher.match(list, 'jii', '', '').sort)
+       ["juiciness", [[0, 5]]]], matcher.match(list, 'jii').sort)
+    matcher.cache list, 'jii', matcher.match(list, 'jii')
 
     assert_equal(
       [["juicily",   [[2, 5]]],
-       ["juiciness", [[2, 5]]]], matcher.match(list, 'ii', '', '').sort)
+       ["juiciness", [[2, 5]]]], matcher.match(list, 'ii').sort)
+    matcher.cache list, 'ii', matcher.match(list, 'jii')
 
     assert_equal 3, matcher.caches[list.object_id].length
     assert_equal 2, matcher.caches[list.object_id]['ii'].length
@@ -256,40 +261,40 @@ class TestFZF < MiniTest::Unit::TestCase
   def test_fuzzy_matcher_case_sensitive
     # Smart-case match (Uppercase found)
     assert_equal [['Fruit', [[0, 5]]]],
-      FZF::FuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], 'Fruit', '', '').sort
+      FZF::FuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], 'Fruit').sort
 
     # Smart-case match (Uppercase not-found)
     assert_equal [["Fruit", [[0, 5]]], ["Grapefruit", [[5, 10]]]],
-      FZF::FuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], 'fruit', '', '').sort
+      FZF::FuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], 'fruit').sort
 
     # Case-sensitive match (-i)
     assert_equal [['Fruit', [[0, 5]]]],
-      FZF::FuzzyMatcher.new(0).match(%w[Fruit Grapefruit], 'Fruit', '', '').sort
+      FZF::FuzzyMatcher.new(0).match(%w[Fruit Grapefruit], 'Fruit').sort
 
     # Case-insensitive match (+i)
     assert_equal [["Fruit", [[0, 5]]], ["Grapefruit", [[5, 10]]]],
       FZF::FuzzyMatcher.new(Regexp::IGNORECASE).
-      match(%w[Fruit Grapefruit], 'Fruit', '', '').sort
+      match(%w[Fruit Grapefruit], 'Fruit').sort
   end
 
   def test_extended_fuzzy_matcher_case_sensitive
     %w['Fruit Fruit$].each do |q|
       # Smart-case match (Uppercase found)
       assert_equal [['Fruit', [[0, 5]]]],
-        FZF::ExtendedFuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], q, '', '').sort
+        FZF::ExtendedFuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], q).sort
 
       # Smart-case match (Uppercase not-found)
       assert_equal [["Fruit", [[0, 5]]], ["Grapefruit", [[5, 10]]]],
-        FZF::ExtendedFuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], q.downcase, '', '').sort
+        FZF::ExtendedFuzzyMatcher.new(nil).match(%w[Fruit Grapefruit], q.downcase).sort
 
       # Case-sensitive match (-i)
       assert_equal [['Fruit', [[0, 5]]]],
-        FZF::ExtendedFuzzyMatcher.new(0).match(%w[Fruit Grapefruit], q, '', '').sort
+        FZF::ExtendedFuzzyMatcher.new(0).match(%w[Fruit Grapefruit], q).sort
 
       # Case-insensitive match (+i)
       assert_equal [["Fruit", [[0, 5]]], ["Grapefruit", [[5, 10]]]],
         FZF::ExtendedFuzzyMatcher.new(Regexp::IGNORECASE).
-        match(%w[Fruit Grapefruit], q, '', '').sort
+        match(%w[Fruit Grapefruit], q).sort
     end
   end
 
@@ -304,7 +309,8 @@ class TestFZF < MiniTest::Unit::TestCase
       juicy
       _juice]
     match = proc { |q, prefix|
-      matcher.match(list, q, prefix, '').sort.map { |p| [p.first, p.last.sort] }
+      cached = matcher.cached(list, q, prefix, '')
+      matcher.match(list, q, cached).sort.map { |p| [p.first, p.last.sort] }
     }
 
     assert matcher.caches.empty?
@@ -366,15 +372,20 @@ class TestFZF < MiniTest::Unit::TestCase
       c.java$
       d.java
     ]
+    match = lambda do |q, p|
+      cached = matcher.cached(list, q, p, '')
+      result = matcher.match(list, q, cached)
+      matcher.cache list, q, result
+      result
+    end
     2.times do
-      assert_equal 5, matcher.match(list, 'java',   'java',   '').length
-      assert_equal 3, matcher.match(list, 'java$',  'java$',  '').length
-      assert_equal 1, matcher.match(list, 'java$$', 'java$$', '').length
-
-      assert_equal 0, matcher.match(list, '!java',  '!java',  '').length
-      assert_equal 4, matcher.match(list, '!^jav',  '!^jav',  '').length
-      assert_equal 4, matcher.match(list, '!^java', '!^java', '').length
-      assert_equal 2, matcher.match(list, '!^java !b !c', '!^java', '').length
+      assert_equal 5, match.call('java',         'java').length
+      assert_equal 3, match.call('java$',        'java$').length
+      assert_equal 1, match.call('java$$',       'java$$').length
+      assert_equal 0, match.call('!java',        '!java').length
+      assert_equal 4, match.call('!^jav',        '!^jav').length
+      assert_equal 4, match.call('!^java',       '!^java').length
+      assert_equal 2, match.call('!^java !b !c', '!^java').length
     end
   end
 
@@ -400,7 +411,7 @@ class TestFZF < MiniTest::Unit::TestCase
        ["0____1",   [[0, 6]]],
        ["0_____1",  [[0, 7]]],
        ["0______1", [[0, 8]]]],
-      FZF.sort(matcher.match(list, '01', '', '')))
+      FZF.sort(matcher.match(list, '01')))
 
     assert_equal(
       [["01",       [[0, 1], [1, 2]]],
@@ -411,7 +422,7 @@ class TestFZF < MiniTest::Unit::TestCase
        ["____0_1",  [[4, 5], [6, 7]]],
        ["0______1", [[0, 1], [7, 8]]],
        ["___01___", [[3, 4], [4, 5]]]],
-      FZF.sort(xmatcher.match(list, '0 1', '', '')))
+      FZF.sort(xmatcher.match(list, '0 1')))
 
     assert_equal(
       [["_01_",     [[1, 3], [0, 4]], [4, 4, "_01_"]],
@@ -420,7 +431,7 @@ class TestFZF < MiniTest::Unit::TestCase
        ["0____1",   [[0, 6], [1, 3]], [6, 6, "0____1"]],
        ["0_____1",  [[0, 7], [1, 3]], [7, 7, "0_____1"]],
        ["0______1", [[0, 8], [1, 3]], [8, 8, "0______1"]]],
-      FZF.sort(xmatcher.match(list, '01 __', '', '')).map { |tuple|
+      FZF.sort(xmatcher.match(list, '01 __')).map { |tuple|
         tuple << FZF.rank(tuple)
       }
     )
@@ -433,16 +444,16 @@ class TestFZF < MiniTest::Unit::TestCase
       extended-exact-mode-not-fuzzy
       extended'-fuzzy-mode
     ]
-    assert_equal 2, fuzzy.match(list, 'extended', '', '').length
-    assert_equal 2, fuzzy.match(list, 'mode extended', '', '').length
-    assert_equal 2, fuzzy.match(list, 'xtndd', '', '').length
-    assert_equal 2, fuzzy.match(list, "'-fuzzy", '', '').length
+    assert_equal 2, fuzzy.match(list, 'extended').length
+    assert_equal 2, fuzzy.match(list, 'mode extended').length
+    assert_equal 2, fuzzy.match(list, 'xtndd').length
+    assert_equal 2, fuzzy.match(list, "'-fuzzy").length
 
-    assert_equal 2, exact.match(list, 'extended', '', '').length
-    assert_equal 2, exact.match(list, 'mode extended', '', '').length
-    assert_equal 0, exact.match(list, 'xtndd', '', '').length
-    assert_equal 1, exact.match(list, "'-fuzzy", '', '').length
-    assert_equal 2, exact.match(list, "-fuzzy", '', '').length
+    assert_equal 2, exact.match(list, 'extended').length
+    assert_equal 2, exact.match(list, 'mode extended').length
+    assert_equal 0, exact.match(list, 'xtndd').length
+    assert_equal 1, exact.match(list, "'-fuzzy").length
+    assert_equal 2, exact.match(list, "-fuzzy").length
   end
 
   if RUBY_PLATFORM =~ /darwin/
@@ -472,16 +483,16 @@ class TestFZF < MiniTest::Unit::TestCase
 
     def test_nfd_fuzzy_matcher
       matcher = FZF::FuzzyMatcher.new 0
-      assert_equal [], matcher.match([NFD + NFD], '할', '', '')
-      match   = matcher.match([NFD + NFD], '글글', '', '')
+      assert_equal [], matcher.match([NFD + NFD], '할')
+      match   = matcher.match([NFD + NFD], '글글')
       assert_equal [[NFD + NFD, [[3, 12]]]], match
       assert_equal ['한글한글', [[1, 4]]], FZF::UConv.nfc(*match.first)
     end
 
     def test_nfd_extended_fuzzy_matcher
       matcher = FZF::ExtendedFuzzyMatcher.new 0
-      assert_equal [], matcher.match([NFD], "'글글", '', '')
-      match   = matcher.match([NFD], "'한글", '', '')
+      assert_equal [], matcher.match([NFD], "'글글")
+      match   = matcher.match([NFD], "'한글")
       assert_equal [[NFD, [[0, 6]]]], match
       assert_equal ['한글', [[0, 2]]], FZF::UConv.nfc(*match.first)
     end
@@ -524,46 +535,46 @@ class TestFZF < MiniTest::Unit::TestCase
     ]
 
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE
-    assert_equal list, matcher.match(list, 'f', '', '').map(&:first)
+    assert_equal list, matcher.match(list, 'f').map(&:first)
     assert_equal [
       [list[0], [[2,  5]]],
-      [list[1], [[9, 17]]]], matcher.match(list, 'is', '', '')
+      [list[1], [[9, 17]]]], matcher.match(list, 'is')
 
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [2]
-    assert_equal [[list[1], [[8, 9]]]], matcher.match(list, 'f', '', '')
-    assert_equal [[list[0], [[8, 9]]]], matcher.match(list, 's', '', '')
+    assert_equal [[list[1], [[8, 9]]]], matcher.match(list, 'f')
+    assert_equal [[list[0], [[8, 9]]]], matcher.match(list, 's')
 
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [3]
-    assert_equal [[list[0], [[19, 20]]]], matcher.match(list, 'r', '', '')
+    assert_equal [[list[0], [[19, 20]]]], matcher.match(list, 'r')
 
     # Comma-separated
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [3, 1]
-    assert_equal [[list[0], [[19, 20]]], [list[1], [[3, 4]]]], matcher.match(list, 'r', '', '')
+    assert_equal [[list[0], [[19, 20]]], [list[1], [[3, 4]]]], matcher.match(list, 'r')
 
     # Ordered
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [1, 3]
-    assert_equal [[list[0], [[3, 4]]], [list[1], [[3, 4]]]], matcher.match(list, 'r', '', '')
+    assert_equal [[list[0], [[3, 4]]], [list[1], [[3, 4]]]], matcher.match(list, 'r')
 
     regex = FZF.build_delim_regex "\t"
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [1], regex
-    assert_equal [[list[0], [[3, 10]]]], matcher.match(list, 're', '', '')
+    assert_equal [[list[0], [[3, 10]]]], matcher.match(list, 're')
 
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [2], regex
-    assert_equal [], matcher.match(list, 'r', '', '')
-    assert_equal [[list[1], [[9, 17]]]], matcher.match(list, 'is', '', '')
+    assert_equal [], matcher.match(list, 'r')
+    assert_equal [[list[1], [[9, 17]]]], matcher.match(list, 'is')
 
     # Negative indexing
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [-1], regex
-    assert_equal [[list[0], [[3, 6]]]], matcher.match(list, 'rt', '', '')
-    assert_equal [[list[0], [[2, 5]]], [list[1], [[9, 17]]]], matcher.match(list, 'is', '', '')
+    assert_equal [[list[0], [[3, 6]]]], matcher.match(list, 'rt')
+    assert_equal [[list[0], [[2, 5]]], [list[1], [[9, 17]]]], matcher.match(list, 'is')
 
     # Regex delimiter
     regex = FZF.build_delim_regex "[ \t]+"
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [1], regex
-    assert_equal [list[1]], matcher.match(list, 'f', '', '').map(&:first)
+    assert_equal [list[1]], matcher.match(list, 'f').map(&:first)
 
     matcher = FZF::FuzzyMatcher.new Regexp::IGNORECASE, [2], regex
-    assert_equal [[list[0], [[1, 2]]], [list[1], [[8, 9]]]], matcher.match(list, 'f', '', '')
+    assert_equal [[list[0], [[1, 2]]], [list[1], [[8, 9]]]], matcher.match(list, 'f')
   end
 
   def stream_for str
@@ -659,7 +670,7 @@ class TestFZF < MiniTest::Unit::TestCase
     assert_equal [
       ['1           2   3    4',   [[0, 13], [16, 22]]],
       ['1           3   4      2', [[0, 24], [12, 17]]],
-    ], FZF.sort(FZF::ExtendedFuzzyMatcher.new(nil).match(list, '12 34', '', ''))
+    ], FZF.sort(FZF::ExtendedFuzzyMatcher.new(nil).match(list, '12 34'))
   end
 end
 

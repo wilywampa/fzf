@@ -39,7 +39,6 @@
 require 'thread'
 require 'curses'
 require 'set'
-require 'msgpack'
 
 unless String.method_defined? :force_encoding
   class String
@@ -77,11 +76,30 @@ class FZF
 
   # TODO
   def cores?
-    cores = `sysctl -n hw.physicalcpu 2> /dev/null`.chomp
-    if $?.exitstatus == 0
-      cores.to_i
+    if File.readable? '/proc/cpuinfo'
+      cores = Hash.new { |h, k| h[k] = Set.new }
+      proc_id = nil
+      set = Set.new
+      File.readlines('/proc/cpuinfo').each do |line|
+        case line
+        when /physical id/
+          if proc_id != line
+            cores[line] = set
+            set = Set.new
+          end
+          cores[proc_id = line] = set
+        when /core id/
+          set << line
+        end
+      end
+      cores.values.inject(0) { |sum, s| sum + (s.length || 1) }
     else
-      1
+      cores = `sysctl -n hw.physicalcpu 2> /dev/null`.chomp
+      if $?.exitstatus == 0
+        cores.to_i
+      else
+        1
+      end
     end
   end
 
@@ -100,8 +118,8 @@ class FZF
     @nth      = nil
     @delim    = nil
     @pids     = []
-    @procs    = cores?
-    @parallel_min = 10000
+    @procs    = nil
+    @par_min  = 10000
 
     argv =
       if opts = ENV['FZF_DEFAULT_OPTS']
@@ -168,13 +186,20 @@ class FZF
       when /^-p([1-9][0-9]*)$/, /^--parallel=([1-9][0-9]*)$/
         @procs = $1.to_i
       when '--parallel-min'
-        usage 1, 'number of processes required' unless pmin = argv.shift
-        @parallel_min = pmin.to_i
+        usage 1, 'number required' unless pmin = argv.shift
+        @par_min = pmin.to_i
       when /^--parallel-min=([1-9][0-9]*)$/
-        @parallel_min = $1.to_i
+        @par_min = $1.to_i
       else
         usage 1, "illegal option: #{o}"
       end
+    end
+
+    begin
+      require 'msgpack'
+      @procs ||= cores?
+    rescue LoadError
+      @procs = nil
     end
 
     @source   = source.clone
@@ -305,6 +330,10 @@ class FZF
     -n, --nth=[-]N[,..]  Comma-separated list of field indexes for limiting
                          search scope (positive or negative integers)
     -d, --delimiter=STR  Field delimiter regex for --nth (default: AWK-style)
+    -p, --parallel=N     Number of processes for parallel search
+                         (default: auto-detect)
+        --parallel-min=N Minimum number of items to start parallel search
+                         (default: 10000)
 
   Search result
     -s, --sort=MAX       Maximum number of matched items to sort (default: 1000)
@@ -704,7 +733,7 @@ class FZF
 
   def search lists, q, cx
     cache_count, cached = cached(lists, q, q[0, cx], q[cx..-1])
-    if @procs <= 1 || lists.empty? || lists.length < @procs || cache_count < @parallel_min
+    if !@procs || @procs <= 1 || lists.empty? || lists.length < @procs || cache_count < @par_min
       search_sequential lists, q, cached
     else
       search_parallel lists, q, cached
@@ -739,6 +768,7 @@ class FZF
     slice_size = lists.length / @procs
     slices = lists.each_slice(slice_size)
 
+    render { print_info " (#{@procs}x)" }
     triples = slices.map do |lists|
       read, write = IO.pipe
       [fork do
@@ -766,16 +796,12 @@ class FZF
         write.close
         result = read.read
         _, status = Process.wait2(pid)
-        raise if result.empty?
-        if status.exitstatus == 0
-          MessagePack.unpack(result).each do |list_object_id, data|
-            mutex.synchronize do
-              matches.concat data
-            end
-            matcher.cache list_map[list_object_id], q, data
+        skip = status.exitstatus != 0
+        MessagePack.unpack(result).each do |list_object_id, data|
+          mutex.synchronize do
+            matches.concat data
           end
-        else
-          skip = true
+          matcher.cache list_map[list_object_id], q, data
         end
       end
     }.each(&:join)
