@@ -228,6 +228,8 @@ function! s:cmd(bang, ...) abort
   let opts = {}
   if len(args) > 0 && isdirectory(expand(args[-1]))
     let opts.dir = remove(args, -1)
+  else
+    let opts.dir = getcwd()
   endif
   if !a:bang
     let opts.tmux = get(g:, 'fzf_tmux_height', s:default_tmux_height)
