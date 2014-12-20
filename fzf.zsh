@@ -21,6 +21,15 @@ __fsel() {
   done
   echo
 }
+zmodload zsh/mapfile
+__neomru() {
+  set -o nonomatch
+  echo ${(F)${(fOa)mapfile[$HOME/.cache/neomru/file]}[1,-2]} \
+    2> /dev/null | fzf -m +s | while read item; do
+    printf '%q ' "$item"
+  done
+  echo
+}
 
 if [[ $- =~ i ]]; then
 
@@ -96,6 +105,16 @@ fzf-dir-history-widget() {
 zle     -N           fzf-dir-history-widget
 bindkey -M viins 'ò' fzf-dir-history-widget  # <M-r>
 
+fzf-combined-widget() {
+  if [[ -z $BUFFER ]]; then
+    zle fzf-history-widget
+  else
+    zle fzf-file-widget
+  fi
+}
+zle     -N   fzf-combined-widget
+bindkey '^R' fzf-combined-widget
+
 # ALT-D - cd into recent directory
 fzf-recent-directory-widget() {
   local dir="$(sed -e "s/^\$'\(.*\)'$/\1/" -e '1!G;h;$!d' \
@@ -109,17 +128,39 @@ fzf-recent-directory-widget() {
   fi
   zle reset-prompt
 }
-zle -N fzf-recent-directory-widget
-bindkey ä fzf-recent-directory-widget
+zle     -N  fzf-recent-directory-widget
+bindkey 'ä' fzf-recent-directory-widget
 
-fzf-combined-widget() {
+# ALT-D - open file from neomru
+if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
+  fzf-neomru-widget() {
+    local height
+    height=${FZF_TMUX_HEIGHT:-40%}
+    if [[ $height =~ %$ ]]; then
+      height="-p ${height%\%}"
+    else
+      height="-l $height"
+    fi
+    tmux split-window $height "zsh -c 'cd $PWD; source ~/.fzf.zsh; \
+      tmux send-keys -t $TMUX_PANE \"\$(__neomru)\"'"
+  }
+else
+  fzf-neomru-widget() {
+    LBUFFER="${LBUFFER}$(__neomru)"
+    zle redisplay
+  }
+fi
+zle     -N   fzf-neomru-widget
+bindkey '^Y' fzf-neomru-widget
+
+fzf-alt-combined-widget() {
   if [[ -z $BUFFER ]]; then
-    zle fzf-history-widget
+    zle fzf-dir-history-widget
   else
-    zle fzf-file-widget
+    zle fzf-neomru-widget
   fi
 }
-zle     -N   fzf-combined-widget
-bindkey '^R' fzf-combined-widget
+zle     -N  fzf-alt-combined-widget
+bindkey 'ò' fzf-alt-combined-widget  # <M-r>
 
 fi
