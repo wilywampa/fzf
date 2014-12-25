@@ -117,8 +117,10 @@ bindkey '^R' fzf-combined-widget
 
 # ALT-D - cd into recent directory
 fzf-recent-directory-widget() {
-  local dir="$(sed -e "s/^\$'\(.*\)'$/\1/" -e '1!G;h;$!d' \
-    $HOME/.chpwd-recent-dirs | fzf +s)"
+  # Read file $HOME/.chpwd-recent-dirs into variable, strip the leading "$'"
+  # and trailing "'", remove the line with $PWD, then combine into one
+  # directory per line of text
+  local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}[1,-2]} | fzf +s)"
   if [[ -n $dir ]]; then
     # Escape special characters
     for char in '*' '(' ')' '|' '<' '>' '[' ']' '?' ' '; do
