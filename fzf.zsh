@@ -120,7 +120,7 @@ fzf-recent-directory-widget() {
   # Read file $HOME/.chpwd-recent-dirs into variable, strip the leading "$'"
   # and trailing "'", remove the line with $PWD, then combine into one
   # directory per line of text
-  local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}[1,-2]} | fzf +s)"
+  local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}} | fzf +s)"
   if [[ -n $dir ]]; then
     # Escape special characters
     for char in '*' '(' ')' '|' '<' '>' '[' ']' '?' ' '; do
