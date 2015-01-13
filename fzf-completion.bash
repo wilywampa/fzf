@@ -53,8 +53,25 @@ _fzf_opts_completion() {
   return 0
 }
 
+_fzf_handle_dynamic_completion() {
+  local cmd orig ret
+  cmd="$1"
+  shift
+
+  orig=$(eval "echo \$_fzf_orig_completion_$cmd")
+  if [ -n "$orig" ] && type "$orig" > /dev/null 2>&1; then
+    $orig "$@"
+  elif [ -n "$_fzf_completion_loader" ]; then
+    _completion_loader "$@"
+    ret=$?
+    eval $(complete | \grep "\-F.* $cmd$" | _fzf_orig_completion_filter)
+    source $BASH_SOURCE
+    return $ret
+  fi
+}
+
 _fzf_path_completion() {
-  local cur base dir leftover matches trigger cmd orig
+  local cur base dir leftover matches trigger cmd
   cmd=$(echo ${COMP_WORDS[0]} | sed 's/[^a-z0-9_=]/_/g')
   COMPREPLY=()
   trigger=${FZF_COMPLETION_TRIGGER:-**}
@@ -70,7 +87,7 @@ _fzf_path_completion() {
         leftover=${leftover/#\/}
         [ "$dir" = './' ] && dir=''
         tput sc
-        matches=$(find "$dir"* $1 2> /dev/null | fzf $FZF_COMPLETION_OPTS $2 -q "$leftover" | while read item; do
+        matches=$(find -L "$dir"* $1 2> /dev/null | fzf $FZF_COMPLETION_OPTS $2 -q "$leftover" | while read item; do
           printf '%q ' "$item"
         done)
         matches=${matches% }
@@ -88,13 +105,12 @@ _fzf_path_completion() {
   else
     shift
     shift
-    orig=$(eval "echo \$_fzf_orig_completion_$cmd")
-    [ -n "$orig" ] && type "$orig" > /dev/null 2>&1 && $orig "$@"
+    _fzf_handle_dynamic_completion "$cmd" "$@"
   fi
 }
 
 _fzf_list_completion() {
-  local cur selected trigger cmd src ret
+  local cur selected trigger cmd src
   read -r src
   cmd=$(echo ${COMP_WORDS[0]} | sed 's/[^a-z0-9_=]/_/g')
   trigger=${FZF_COMPLETION_TRIGGER:-**}
@@ -113,16 +129,7 @@ _fzf_list_completion() {
     fi
   else
     shift
-    orig=$(eval "echo \$_fzf_orig_completion_$cmd")
-    if [ -n "$orig" ] && type "$orig" > /dev/null; then
-      $orig "$@"
-    elif [ -n "$_fzf_completion_loader" ]; then
-      _completion_loader "$@"
-      ret=$?
-      eval $(complete | grep "\-F.* $cmd$" | _fzf_orig_completion_filter)
-      source $BASH_SOURCE
-      return $ret
-    fi
+    _fzf_handle_dynamic_completion "$cmd" "$@"
   fi
 }
 
@@ -160,13 +167,13 @@ _fzf_kill_completion() {
 
 _fzf_telnet_completion() {
   _fzf_list_completion '+m' "$@" << "EOF"
-  grep -v '^\s*\(#\|$\)' /etc/hosts | awk '{if (length($2) > 0) {print $2}}' | sort -u
+  \grep -v '^\s*\(#\|$\)' /etc/hosts | awk '{if (length($2) > 0) {print $2}}' | sort -u
 EOF
 }
 
 _fzf_ssh_completion() {
   _fzf_list_completion '+m' "$@" << "EOF"
-    cat <(cat ~/.ssh/config /etc/ssh/ssh_config 2> /dev/null | grep -i ^host | grep -v '*') <(grep -v '^\s*\(#\|$\)' /etc/hosts) | awk '{print $2}' | sort -u
+    cat <(cat ~/.ssh/config /etc/ssh/ssh_config 2> /dev/null | \grep -i ^host | \grep -v '*') <(\grep -v '^\s*\(#\|$\)' /etc/hosts) | awk '{print $2}' | sort -u
 EOF
 }
 
@@ -201,8 +208,8 @@ x_cmds="kill ssh telnet unset unalias export"
 # Preserve existing completion
 if [ "$_fzf_completion_loaded" != '0.8.6-1' ]; then
   # Really wish I could use associative array but OSX comes with bash 3.2 :(
-  eval $(complete | grep '\-F' | grep -v _fzf_ |
-    grep -E " ($(echo $d_cmds $f_cmds $a_cmds $x_cmds | sed 's/ /|/g' | sed 's/+/\\+/g'))$" | _fzf_orig_completion_filter)
+  eval $(complete | \grep '\-F' | \grep -v _fzf_ |
+    \grep -E " ($(echo $d_cmds $f_cmds $a_cmds $x_cmds | sed 's/ /|/g' | sed 's/+/\\+/g'))$" | _fzf_orig_completion_filter)
   export _fzf_completion_loaded=0.8.6-1
 fi
 

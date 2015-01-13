@@ -1,4 +1,4 @@
-" Copyright (c) 2014 Junegunn Choi
+" Copyright (c) 2015 Junegunn Choi
 "
 " MIT License
 "
@@ -25,6 +25,7 @@ let s:min_tmux_width  = 10
 let s:min_tmux_height = 3
 let s:default_tmux_height = '40%'
 let s:launcher = 'xterm -e bash -ic %s'
+let s:fzf_go = expand('<sfile>:h:h').'/bin/fzf'
 let s:fzf_rb = expand('<sfile>:h:h').'/fzf'
 
 let s:cpo_save = &cpo
@@ -34,7 +35,8 @@ function! s:fzf_exec()
   if !exists('s:exec')
     call system('type fzf')
     if v:shell_error
-      let s:exec = executable(s:fzf_rb) ? s:fzf_rb : ''
+      let s:exec = executable(s:fzf_go) ?
+            \ s:fzf_go : (executable(s:fzf_rb) ? s:fzf_rb : '')
     else
       let s:exec = 'fzf'
     endif
@@ -113,7 +115,7 @@ function! s:tmux_splittable(dict)
 endfunction
 
 function! s:pushd(dict)
-  if has_key(a:dict, 'dir')
+  if !empty(get(a:dict, 'dir', ''))
     let a:dict.prev_dir = getcwd()
     execute 'chdir '.s:escape(a:dict.dir)
   endif
@@ -148,11 +150,18 @@ function! s:execute(dict, command, temps)
   endif
 endfunction
 
-function! s:execute_tmux(dict, command, temps)
-  if has_key(a:dict, 'dir')
-    let command = 'cd '.s:escape(a:dict.dir).' && '.a:command
+function! s:env_var(name)
+  if exists('$'.a:name)
+    return a:name . "='". substitute(expand('$'.a:name), "'", "'\\\\''", 'g') . "' "
   else
-    let command = a:command
+    return ''
+  endif
+endfunction
+
+function! s:execute_tmux(dict, command, temps)
+  let command = s:env_var('FZF_DEFAULT_OPTS').s:env_var('FZF_DEFAULT_COMMAND').a:command
+  if !empty(get(a:dict, 'dir', ''))
+    let command = 'cd '.s:escape(a:dict.dir).' && '.command
   endif
 
   let splitopt = '-v'

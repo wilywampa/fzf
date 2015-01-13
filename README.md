@@ -8,11 +8,6 @@ fzf is a general-purpose fuzzy finder for your shell.
 It was heavily inspired by [ctrlp.vim](https://github.com/kien/ctrlp.vim) and
 the likes.
 
-Requirements
-------------
-
-fzf requires Ruby (>= 1.8.5).
-
 Installation
 ------------
 
@@ -51,8 +46,12 @@ Once you have cloned the repository, add the following line to your .vimrc.
 set rtp+=~/.fzf
 ```
 
-Or you may use any Vim plugin manager, such as
-[vim-plug](https://github.com/junegunn/vim-plug).
+Or you may use [vim-plug](https://github.com/junegunn/vim-plug) to manage fzf
+inside Vim:
+
+```vim
+Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': 'yes \| ./install' }
+```
 
 Usage
 -----
@@ -61,38 +60,39 @@ Usage
 usage: fzf [options]
 
   Search
-    -x, --extended       Extended-search mode
-    -e, --extended-exact Extended-search mode (exact match)
-    -i                   Case-insensitive match (default: smart-case match)
-    +i                   Case-sensitive match
-    -n, --nth=N[,..]     Comma-separated list of field index expressions
-                         for limiting search scope. Each can be a non-zero
-                         integer or a range expression ([BEGIN]..[END])
-    -d, --delimiter=STR  Field delimiter regex for --nth (default: AWK-style)
+    -x, --extended        Extended-search mode
+    -e, --extended-exact  Extended-search mode (exact match)
+    -i                    Case-insensitive match (default: smart-case match)
+    +i                    Case-sensitive match
+    -n, --nth=N[,..]      Comma-separated list of field index expressions
+                          for limiting search scope. Each can be a non-zero
+                          integer or a range expression ([BEGIN]..[END])
+        --with-nth=N[,..] Transform the item using index expressions for search
+    -d, --delimiter=STR   Field delimiter regex for --nth (default: AWK-style)
 
   Search result
-    -s, --sort=MAX       Maximum number of matched items to sort (default: 1000)
-    +s, --no-sort        Do not sort the result. Keep the sequence unchanged.
+    -s, --sort=MAX        Maximum number of matched items to sort (default: 1000)
+    +s, --no-sort         Do not sort the result. Keep the sequence unchanged.
 
   Interface
-    -m, --multi          Enable multi-select with tab/shift-tab
-        --no-mouse       Disable mouse
-    +c, --no-color       Disable colors
-    +2, --no-256         Disable 256-color
-        --black          Use black background
-        --reverse        Reverse orientation
-        --prompt=STR     Input prompt (default: '> ')
+    -m, --multi           Enable multi-select with tab/shift-tab
+        --no-mouse        Disable mouse
+    +c, --no-color        Disable colors
+    +2, --no-256          Disable 256-color
+        --black           Use black background
+        --reverse         Reverse orientation
+        --prompt=STR      Input prompt (default: '> ')
 
   Scripting
-    -q, --query=STR      Start the finder with the given query
-    -1, --select-1       Automatically select the only match
-    -0, --exit-0         Exit immediately when there's no match
-    -f, --filter=STR     Filter mode. Do not start interactive finder.
-        --print-query    Print query as the first line
+    -q, --query=STR       Start the finder with the given query
+    -1, --select-1        Automatically select the only match
+    -0, --exit-0          Exit immediately when there's no match
+    -f, --filter=STR      Filter mode. Do not start interactive finder.
+        --print-query     Print query as the first line
 
   Environment variables
-    FZF_DEFAULT_COMMAND  Default command to use when input is tty
-    FZF_DEFAULT_OPTS     Defaults options. (e.g. "-x -m --sort 10000")
+    FZF_DEFAULT_COMMAND   Default command to use when input is tty
+    FZF_DEFAULT_OPTS      Defaults options. (e.g. "-x -m --sort 10000")
 ```
 
 fzf will launch curses-based finder, read the list from STDIN, and write the
@@ -431,21 +431,6 @@ If you have any rendering issues, check the followings:
   option. And if it solves your problem, I recommend including it in
   `FZF_DEFAULT_OPTS` for further convenience.
 4. If you still have problem, try `--no-256` option or even `--no-color`.
-5. Ruby 1.9 or above is required for correctly displaying unicode characters.
-
-### Ranking algorithm
-
-fzf sorts the result first by the length of the matched substring, then by the
-length of the whole string. However it only does so when the number of matches
-is less than the limit which is by default 1000, in order to avoid the cost of
-sorting a large list and limit the response time of the query.
-
-This limit can be adjusted with `-s` option, or with the environment variable
-`FZF_DEFAULT_OPTS`.
-
-```sh
-export FZF_DEFAULT_OPTS="--sort 20000"
-```
 
 ### Respecting `.gitignore`, `.hgignore`, and `svn:ignore`
 
@@ -472,7 +457,7 @@ speed of the traversal.
 ```sh
 # Copy the original fzf function to __fzf
 declare -f __fzf > /dev/null ||
-  eval "$(echo "__fzf() {"; declare -f fzf | grep -v '^{' | tail -n +2)"
+  eval "$(echo "__fzf() {"; declare -f fzf | \grep -v '^{' | tail -n +2)"
 
 # Use git ls-tree when possible
 fzf() {
@@ -539,12 +524,6 @@ function fe
   end
 end
 ```
-
-### Windows
-
-fzf works on [Cygwin](http://www.cygwin.com/) and
-[MSYS2](http://sourceforge.net/projects/msys2/). You may need to use `--black`
-option on MSYS2 to avoid rendering issues.
 
 ### Handling UTF-8 NFD paths on OSX
 
