@@ -1,11 +1,15 @@
 package fzf
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/signal"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	C "github.com/junegunn/fzf/src/curses"
@@ -30,7 +34,7 @@ type Terminal struct {
 	progress   int
 	reading    bool
 	merger     *Merger
-	selected   map[*string]*string
+	selected   map[*string]selectedItem
 	reqBox     *util.EventBox
 	eventBox   *util.EventBox
 	mutex      sync.Mutex
@@ -38,7 +42,27 @@ type Terminal struct {
 	suppress   bool
 }
 
+type selectedItem struct {
+	at   time.Time
+	text *string
+}
+
+type ByTimeOrder []selectedItem
+
+func (a ByTimeOrder) Len() int {
+	return len(a)
+}
+
+func (a ByTimeOrder) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
+func (a ByTimeOrder) Less(i, j int) bool {
+	return a[i].at.Before(a[j].at)
+}
+
 var _spinner = []string{`-`, `\`, `|`, `/`, `-`, `\`, `|`, `/`}
+var _runeWidths = make(map[rune]int)
 
 const (
 	reqPrompt util.EventType = iota
@@ -62,7 +86,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		prompt:     opts.Prompt,
 		tac:        opts.Sort == 0,
 		reverse:    opts.Reverse,
-		cx:         displayWidth(input),
+		cx:         len(input),
 		cy:         0,
 		offset:     0,
 		yanked:     []rune{},
@@ -70,7 +94,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		multi:      opts.Multi,
 		printQuery: opts.PrintQuery,
 		merger:     EmptyMerger,
-		selected:   make(map[*string]*string),
+		selected:   make(map[*string]selectedItem),
 		reqBox:     util.NewEventBox(),
 		eventBox:   eventBox,
 		mutex:      sync.Mutex{},
@@ -134,24 +158,38 @@ func (t *Terminal) output() {
 		fmt.Println(string(t.input))
 	}
 	if len(t.selected) == 0 {
-		if t.merger.Length() > t.cy {
+		cnt := t.merger.Length()
+		if cnt > 0 && cnt > t.cy {
 			fmt.Println(t.merger.Get(t.listIndex(t.cy)).AsString())
 		}
 	} else {
-		for ptr, orig := range t.selected {
-			if orig != nil {
-				fmt.Println(*orig)
-			} else {
-				fmt.Println(*ptr)
-			}
+		sels := make([]selectedItem, 0, len(t.selected))
+		for _, sel := range t.selected {
+			sels = append(sels, sel)
 		}
+		sort.Sort(ByTimeOrder(sels))
+		for _, sel := range sels {
+			fmt.Println(*sel.text)
+		}
+	}
+}
+
+func runeWidth(r rune, prefixWidth int) int {
+	if r == '\t' {
+		return 8 - prefixWidth%8
+	} else if w, found := _runeWidths[r]; found {
+		return w
+	} else {
+		w := runewidth.RuneWidth(r)
+		_runeWidths[r] = w
+		return w
 	}
 }
 
 func displayWidth(runes []rune) int {
 	l := 0
 	for _, r := range runes {
-		l += runewidth.RuneWidth(r)
+		l += runeWidth(r, l)
 	}
 	return l
 }
@@ -233,16 +271,27 @@ func (t *Terminal) printItem(item *Item, current bool) {
 }
 
 func trimRight(runes []rune, width int) ([]rune, int) {
-	currentWidth := displayWidth(runes)
-	trimmed := 0
-
-	for currentWidth > width && len(runes) > 0 {
-		sz := len(runes)
-		currentWidth -= runewidth.RuneWidth(runes[sz-1])
-		runes = runes[:sz-1]
-		trimmed++
+	// We start from the beginning to handle tab characters
+	l := 0
+	for idx, r := range runes {
+		l += runeWidth(r, l)
+		if idx > 0 && l > width {
+			return runes[:idx], len(runes) - idx
+		}
 	}
-	return runes, trimmed
+	return runes, 0
+}
+
+func displayWidthWithLimit(runes []rune, prefixWidth int, limit int) int {
+	l := 0
+	for _, r := range runes {
+		l += runeWidth(r, l+prefixWidth)
+		if l > limit {
+			// Early exit
+			return l
+		}
+	}
+	return l
 }
 
 func trimLeft(runes []rune, width int) ([]rune, int32) {
@@ -250,9 +299,9 @@ func trimLeft(runes []rune, width int) ([]rune, int32) {
 	var trimmed int32
 
 	for currentWidth > width && len(runes) > 0 {
-		currentWidth -= runewidth.RuneWidth(runes[0])
 		runes = runes[1:]
 		trimmed++
+		currentWidth = displayWidthWithLimit(runes, 2, width)
 	}
 	return runes, trimmed
 }
@@ -302,16 +351,39 @@ func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int) {
 
 	sort.Sort(ByOrder(offsets))
 	var index int32
+	var substr string
+	var prefixWidth int
 	for _, offset := range offsets {
 		b := util.Max32(index, offset[0])
 		e := util.Max32(index, offset[1])
-		C.CPrint(col1, bold, string(text[index:b]))
-		C.CPrint(col2, bold, string(text[b:e]))
+
+		substr, prefixWidth = processTabs(text[index:b], prefixWidth)
+		C.CPrint(col1, bold, substr)
+
+		substr, prefixWidth = processTabs(text[b:e], prefixWidth)
+		C.CPrint(col2, bold, substr)
+
 		index = e
 	}
 	if index < int32(len(text)) {
-		C.CPrint(col1, bold, string(text[index:]))
+		substr, _ = processTabs(text[index:], prefixWidth)
+		C.CPrint(col1, bold, substr)
 	}
+}
+
+func processTabs(runes []rune, prefixWidth int) (string, int) {
+	var strbuf bytes.Buffer
+	l := prefixWidth
+	for _, r := range runes {
+		w := runeWidth(r, l)
+		l += w
+		if r == '\t' {
+			strbuf.WriteString(strings.Repeat(" ", w))
+		} else {
+			strbuf.WriteRune(r)
+		}
+	}
+	return strbuf.String(), l
 }
 
 func (t *Terminal) printAll() {
@@ -387,6 +459,15 @@ func (t *Terminal) Loop() {
 			<-timer.C
 			t.reqBox.Set(reqRefresh, nil)
 		}()
+
+		resizeChan := make(chan os.Signal, 1)
+		signal.Notify(resizeChan, syscall.SIGWINCH)
+		go func() {
+			for {
+				<-resizeChan
+				t.reqBox.Set(reqRedraw, nil)
+			}
+		}()
 	}
 
 	go func() {
@@ -406,6 +487,8 @@ func (t *Terminal) Loop() {
 						t.suppress = false
 					case reqRedraw:
 						C.Clear()
+						C.Endwin()
+						C.Refresh()
 						t.printAll()
 					case reqClose:
 						C.Close()
@@ -443,7 +526,13 @@ func (t *Terminal) Loop() {
 			if idx < t.merger.Length() {
 				item := t.merger.Get(idx)
 				if _, found := t.selected[item.text]; !found {
-					t.selected[item.text] = item.origText
+					var strptr *string
+					if item.origText != nil {
+						strptr = item.origText
+					} else {
+						strptr = item.text
+					}
+					t.selected[item.text] = selectedItem{time.Now(), strptr}
 				} else {
 					delete(t.selected, item.text)
 				}
@@ -514,7 +603,8 @@ func (t *Terminal) Loop() {
 				t.rubout("[^[:alnum:]][[:alnum:]]")
 			}
 		case C.CtrlY:
-			t.input = append(append(t.input[:t.cx], t.yanked...), t.input[t.cx:]...)
+			suffix := copySlice(t.input[t.cx:])
+			t.input = append(append(t.input[:t.cx], t.yanked...), suffix...)
 			t.cx += len(t.yanked)
 		case C.Del:
 			t.delChar()
