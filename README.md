@@ -30,13 +30,13 @@ curl -L https://github.com/junegunn/fzf/archive/master.tar.gz |
 
 The script will setup:
 
-- `fzf` function (bash, zsh, fish)
+- `fzf` command
 - Key bindings (`CTRL-T`, `CTRL-R`, and `ALT-C`) (bash, zsh, fish)
 - Fuzzy auto-completion (bash)
 
-If you don't use any of the aforementioned shells, you have to manually place
-fzf executable in a directory included in `$PATH`. Key bindings and
-auto-completion will not be available in that case.
+If you don't need the extra goodies, you can simply download
+[fzf executable](https://github.com/junegunn/fzf-bin/releases)
+and place it in a directory included in `$PATH`.
 
 ### Install as Vim plugin
 
@@ -71,7 +71,7 @@ usage: fzf [options]
     -d, --delimiter=STR   Field delimiter regex for --nth (default: AWK-style)
 
   Search result
-    -s, --sort=MAX        Maximum number of matched items to sort (default: 1000)
+    -s, --sort            Sort the result
     +s, --no-sort         Do not sort the result. Keep the sequence unchanged.
 
   Interface
@@ -92,7 +92,7 @@ usage: fzf [options]
 
   Environment variables
     FZF_DEFAULT_COMMAND   Default command to use when input is tty
-    FZF_DEFAULT_OPTS      Defaults options. (e.g. "-x -m --sort 10000")
+    FZF_DEFAULT_OPTS      Defaults options. (e.g. "-x -m")
 ```
 
 fzf will launch curses-based finder, read the list from STDIN, and write the
@@ -542,4 +542,3 @@ Author
 ------
 
 Junegunn Choi
-
