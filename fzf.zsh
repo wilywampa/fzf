@@ -65,12 +65,12 @@ bindkey 'ã' fzf-cd-widget
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
-  newbuffer=$(fc -l 1         \
-    | LC_ALL='C' sort -k 2 -r \
-    | LC_ALL='C' uniq -f 1    \
-    | LC_ALL='C' sort -n      \
-    | sed 's/ ###.*$//'       \
-    | fzf +s +m -n..,1,2..    \
+  newbuffer=$(fc -l -${FZF_HIST_LIMIT:-5000} \
+    | LC_ALL='C' sort -k 2 -r                \
+    | LC_ALL='C' uniq -f 1                   \
+    | LC_ALL='C' sort -n                     \
+    | sed 's/ ###.*$//'                      \
+    | fzf +s +m -n..,1,2..                   \
     | sed "s/ *[0-9*]* *//")
   lines=(${(s:\n:)newbuffer})
   if [[ ${#lines} -eq 1 ]]; then
