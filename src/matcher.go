@@ -14,6 +14,7 @@ import (
 type MatchRequest struct {
 	chunks  []*Chunk
 	pattern *Pattern
+	final   bool
 }
 
 // Matcher is responsible for performing search
@@ -86,11 +87,12 @@ func (m *Matcher) Loop() {
 		}
 
 		if !foundCache {
-			merger, cancelled = m.scan(request, 0)
+			merger, cancelled = m.scan(request)
 		}
 
 		if !cancelled {
 			m.mergerCache[patternString] = merger
+			merger.final = request.final
 			m.eventBox.Set(EvtSearchFin, merger)
 		}
 	}
@@ -121,7 +123,7 @@ type partialResult struct {
 	matches []*Item
 }
 
-func (m *Matcher) scan(request MatchRequest, limit int) (*Merger, bool) {
+func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 	startedAt := time.Now()
 
 	numChunks := len(request.chunks)
@@ -175,15 +177,11 @@ func (m *Matcher) scan(request MatchRequest, limit int) (*Merger, bool) {
 		count++
 		matchCount += matchesInChunk
 
-		if limit > 0 && matchCount > limit {
-			return nil, wait() // For --select-1 and --exit-0
-		}
-
 		if count == numChunks {
 			break
 		}
 
-		if !empty && m.reqBox.Peak(reqReset) {
+		if !empty && m.reqBox.Peek(reqReset) {
 			return nil, wait()
 		}
 
@@ -201,7 +199,7 @@ func (m *Matcher) scan(request MatchRequest, limit int) (*Merger, bool) {
 }
 
 // Reset is called to interrupt/signal the ongoing search
-func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool) {
+func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final bool) {
 	pattern := m.patternBuilder(patternRunes)
 
 	var event util.EventType
@@ -210,5 +208,5 @@ func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool) {
 	} else {
 		event = reqRetry
 	}
-	m.reqBox.Set(event, MatchRequest{chunks, pattern})
+	m.reqBox.Set(event, MatchRequest{chunks, pattern, final})
 }

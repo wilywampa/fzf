@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-version=0.9.2
+version=0.9.3
 
 cd $(dirname $BASH_SOURCE)
 fzf_base=$(pwd)
@@ -159,7 +159,7 @@ for shell in bash zsh; do
   echo -n "Generate ~/.fzf.$shell ... "
   src=~/.fzf.${shell}
 
-  fzf_completion="[[ \$- =~ i ]] && source $fzf_base/fzf-completion.${shell}"
+  fzf_completion="[[ \$- =~ i ]] && source \"$fzf_base/fzf-completion.${shell}\""
   if [ $auto_completion -ne 0 ]; then
     fzf_completion="# $fzf_completion"
   fi

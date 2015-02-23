@@ -112,6 +112,10 @@ class TestGoFZF < MiniTest::Unit::TestCase
   end
 
   def fzf(*opts)
+    fzf!(*opts) + " > #{TEMPNAME} && echo #{FIN}"
+  end
+
+  def fzf!(*opts)
     opts = opts.map { |o|
       case o
       when Symbol
@@ -123,7 +127,7 @@ class TestGoFZF < MiniTest::Unit::TestCase
         nil
       end
     }.compact
-    "fzf #{opts.join ' '} > #{TEMPNAME} && echo #{FIN}"
+    "fzf #{opts.join ' '}"
   end
 
   def test_vanilla
@@ -290,12 +294,33 @@ class TestGoFZF < MiniTest::Unit::TestCase
     assert_equal ['555555'], readonce.split($/)
   end
 
+  def test_select_1_exit_0_fail
+    [:'0', :'1', [:'1', :'0']].each do |opt|
+      tmux.send_keys "seq 1 100 | #{fzf :print_query, :multi, :q, 5, *opt}", :Enter
+      tmux.until { |lines| lines.last =~ /^> 5/ }
+      tmux.send_keys :BTab, :BTab, :BTab, :Enter
+      tmux.until { |lines| lines[-1].include?(FIN) }
+      assert_equal ['5', '5', '15', '25'], readonce.split($/)
+    end
+  end
+
   def test_query_unicode
     tmux.send_keys "(echo abc; echo 가나다) | #{fzf :query, '가다'}", :Enter
     tmux.until { |lines| lines.last.start_with? '>' }
     tmux.send_keys :Enter
     tmux.until { |lines| lines[-1].include?(FIN) }
     assert_equal ['가나다'], readonce.split($/)
+  end
+
+  def test_sync
+    tmux.send_keys "seq 1 100 | #{fzf! :multi} | awk '{print \\$1 \\$1}' | #{fzf :sync}", :Enter
+    tmux.until { |lines| lines[-1] == '>' }
+    tmux.send_keys 9
+    tmux.until { |lines| lines[-2] == '  19/100' }
+    tmux.send_keys :BTab, :BTab, :BTab, :Enter
+    tmux.until { |lines| lines[-1] == '>' }
+    tmux.send_keys 'C-K', :Enter
+    assert_equal ['1919'], readonce.split($/)
   end
 end
 

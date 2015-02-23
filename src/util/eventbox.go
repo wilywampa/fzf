@@ -53,8 +53,8 @@ func (events *Events) Clear() {
 	}
 }
 
-// Peak peaks at the event box if the given event is set
-func (b *EventBox) Peak(event EventType) bool {
+// Peek peeks at the event box if the given event is set
+func (b *EventBox) Peek(event EventType) bool {
 	b.cond.L.Lock()
 	defer b.cond.L.Unlock()
 	_, ok := b.events[event]
@@ -76,5 +76,20 @@ func (b *EventBox) Unwatch(events ...EventType) {
 	defer b.cond.L.Unlock()
 	for _, event := range events {
 		b.ignore[event] = true
+	}
+}
+
+func (b *EventBox) WaitFor(event EventType) {
+	looping := true
+	for looping {
+		b.Wait(func(events *Events) {
+			for evt := range *events {
+				switch evt {
+				case event:
+					looping = false
+					return
+				}
+			}
+		})
 	}
 }

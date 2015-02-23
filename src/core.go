@@ -95,51 +95,31 @@ func Run(options *Options) {
 	}
 	matcher := NewMatcher(patternBuilder, opts.Sort > 0, eventBox)
 
-	// Defered-interactive / Non-interactive
-	//   --select-1 | --exit-0 | --filter
-	if filtering := opts.Filter != nil; filtering || opts.Select1 || opts.Exit0 {
-		limit := 0
-		var patternString string
-		if filtering {
-			patternString = *opts.Filter
-		} else {
-			if opts.Select1 || opts.Exit0 {
-				limit = 1
-			}
-			patternString = opts.Query
-		}
-		pattern := patternBuilder([]rune(patternString))
+	// Filtering mode
+	if opts.Filter != nil {
+		pattern := patternBuilder([]rune(*opts.Filter))
 
-		looping := true
 		eventBox.Unwatch(EvtReadNew)
-		for looping {
-			eventBox.Wait(func(events *util.Events) {
-				for evt := range *events {
-					switch evt {
-					case EvtReadFin:
-						looping = false
-						return
-					}
-				}
-			})
-		}
+		eventBox.WaitFor(EvtReadFin)
 
 		snapshot, _ := chunkList.Snapshot()
-		merger, cancelled := matcher.scan(MatchRequest{
+		merger, _ := matcher.scan(MatchRequest{
 			chunks:  snapshot,
-			pattern: pattern}, limit)
+			pattern: pattern})
 
-		if !cancelled && (filtering ||
-			opts.Exit0 && merger.Length() == 0 ||
-			opts.Select1 && merger.Length() == 1) {
-			if opts.PrintQuery {
-				fmt.Println(patternString)
-			}
-			for i := 0; i < merger.Length(); i++ {
-				fmt.Println(merger.Get(i).AsString())
-			}
-			os.Exit(0)
+		if opts.PrintQuery {
+			fmt.Println(*opts.Filter)
 		}
+		for i := 0; i < merger.Length(); i++ {
+			fmt.Println(merger.Get(i).AsString())
+		}
+		os.Exit(0)
+	}
+
+	// Synchronous search
+	if opts.Sync {
+		eventBox.Unwatch(EvtReadNew)
+		eventBox.WaitFor(EvtReadFin)
 	}
 
 	// Go interactive
@@ -147,7 +127,11 @@ func Run(options *Options) {
 
 	// Terminal I/O
 	terminal := NewTerminal(opts, eventBox)
+	deferred := opts.Select1 || opts.Exit0
 	go terminal.Loop()
+	if !deferred {
+		terminal.startChan <- true
+	}
 
 	// Event coordination
 	reading := true
@@ -165,11 +149,11 @@ func Run(options *Options) {
 					reading = reading && evt == EvtReadNew
 					snapshot, count := chunkList.Snapshot()
 					terminal.UpdateCount(count, !reading)
-					matcher.Reset(snapshot, terminal.Input(), false)
+					matcher.Reset(snapshot, terminal.Input(), false, !reading)
 
 				case EvtSearchNew:
 					snapshot, _ := chunkList.Snapshot()
-					matcher.Reset(snapshot, terminal.Input(), true)
+					matcher.Reset(snapshot, terminal.Input(), true, !reading)
 					delay = false
 
 				case EvtSearchProgress:
@@ -181,6 +165,25 @@ func Run(options *Options) {
 				case EvtSearchFin:
 					switch val := value.(type) {
 					case *Merger:
+						if deferred {
+							count := val.Length()
+							if opts.Select1 && count > 1 || opts.Exit0 && !opts.Select1 && count > 0 {
+								deferred = false
+								terminal.startChan <- true
+							} else if val.final {
+								if opts.Exit0 && count == 0 || opts.Select1 && count == 1 {
+									if opts.PrintQuery {
+										fmt.Println(opts.Query)
+									}
+									for i := 0; i < count; i++ {
+										fmt.Println(val.Get(i).AsString())
+									}
+									os.Exit(0)
+								}
+								deferred = false
+								terminal.startChan <- true
+							}
+						}
 						terminal.UpdateList(val)
 					}
 				}
