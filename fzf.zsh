@@ -9,10 +9,6 @@ if [[ ! -x $(whence -p fzf) ]]; then
 fi
 [[ -z $FZF_DEFAULT_OPTS ]] && export FZF_DEFAULT_OPTS="+c -m"
 
-# Auto-completion
-# ---------------
-[[ $- =~ i ]] && source $HOME/.fzf/fzf-completion.zsh
-
 # Key bindings
 # ------------
 # CTRL-T - Paste the selected file path(s) into the command line
