@@ -14,17 +14,17 @@ _fzf_orig_completion_filter() {
 }
 
 _fzf_opts_completion() {
-  local cur prev opts
+  local cur opts
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
-  prev="${COMP_WORDS[COMP_CWORD-1]}"
   opts="
     -x --extended
     -e --extended-exact
     -i +i
     -n --nth
     -d --delimiter
-    -s --sort +s
+    +s --no-sort
+    --tac
     -m --multi
     --no-mouse
     +c --no-color
@@ -36,14 +36,8 @@ _fzf_opts_completion() {
     -1 --select-1
     -0 --exit-0
     -f --filter
-    --print-query"
-
-  case "${prev}" in
-  --sort|-s)
-    COMPREPLY=( $(compgen -W "$(seq 2000 1000 10000)" -- ${cur}) )
-    return 0
-    ;;
-  esac
+    --print-query
+    --sync"
 
   if [[ ${cur} =~ ^-|\+ ]]; then
     COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
@@ -88,7 +82,7 @@ _fzf_path_completion() {
         [ "$dir" = './' ] && dir=''
         tput sc
         matches=$(find -L "$dir"* $1 2> /dev/null | fzf $FZF_COMPLETION_OPTS $2 -q "$leftover" | while read item; do
-          printf '%q ' "$item"
+          printf "%q$3 " "$item"
         done)
         matches=${matches% }
         if [ -n "$matches" ]; then
@@ -103,6 +97,7 @@ _fzf_path_completion() {
       [[ "$dir" =~ /$ ]] || dir="$dir"/
     done
   else
+    shift
     shift
     shift
     _fzf_handle_dynamic_completion "$cmd" "$@"
@@ -136,19 +131,19 @@ _fzf_list_completion() {
 _fzf_all_completion() {
   _fzf_path_completion \
     "-name .git -prune -o -name .svn -prune -o -type d -print -o -type f -print -o -type l -print" \
-    "-m" "$@"
+    "-m" "" "$@"
 }
 
 _fzf_file_completion() {
   _fzf_path_completion \
     "-name .git -prune -o -name .svn -prune -o -type f -print -o -type l -print" \
-    "-m" "$@"
+    "-m" "" "$@"
 }
 
 _fzf_dir_completion() {
   _fzf_path_completion \
     "-name .git -prune -o -name .svn -prune -o -type d -print" \
-    "" "$@"
+    "" "/" "$@"
 }
 
 _fzf_kill_completion() {
@@ -219,7 +214,7 @@ fi
 
 # Directory
 for cmd in $d_cmds; do
-  complete -F _fzf_dir_completion -o default -o bashdefault $cmd
+  complete -F _fzf_dir_completion -o nospace -o plusdirs $cmd
 done
 
 # File

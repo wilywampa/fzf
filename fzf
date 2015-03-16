@@ -8,6 +8,8 @@
 # /_/   /___/_/    Fuzzy finder for your shell
 #
 # Version: 0.8.9 (Dec 24, 2014)
+# Deprecation alert:
+#          This script is no longer maintained. Use the new Go version.
 #
 # Author:  Junegunn Choi
 # URL:     https://github.com/junegunn/fzf
@@ -198,6 +200,8 @@ class FZF
       when '--no-print-query'          then @print_query = false
       when '-e', '--extended-exact'    then @extended = :exact
       when '+e', '--no-extended-exact' then @extended = nil
+      when '--tac', '--sync'
+        # XXX
       else
         usage 1, "illegal option: #{o}"
       end
@@ -619,7 +623,8 @@ class FZF
   def start_reader
     stream =
       if @source.tty?
-        if default_command = ENV['FZF_DEFAULT_COMMAND']
+        default_command = ENV['FZF_DEFAULT_COMMAND']
+        if default_command && !default_command.empty?
           IO.popen(default_command)
         elsif !`which find`.empty?
           IO.popen("find * -path '*/\\.*' -prune -o -type f -print -o -type l -print 2> /dev/null")
