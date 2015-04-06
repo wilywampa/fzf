@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-version=0.9.4
+version=0.9.7
 
 cd $(dirname $BASH_SOURCE)
 fzf_base=$(pwd)
@@ -181,7 +181,13 @@ for shell in bash zsh; do
 # Setup fzf
 # ---------
 if [[ ! "\$PATH" =~ "$fzf_base/bin" ]]; then
-  export PATH="$fzf_base/bin:\$PATH"
+  export PATH="\$PATH:$fzf_base/bin"
+fi
+
+# Man path
+# --------
+if [[ ! "\$MANPATH" =~ "$fzf_base/man" && -d "$fzf_base/man" ]]; then
+  export MANPATH="\$MANPATH:$fzf_base/man"
 fi
 
 # Auto-completion

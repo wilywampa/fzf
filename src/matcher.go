@@ -15,6 +15,7 @@ type MatchRequest struct {
 	chunks  []*Chunk
 	pattern *Pattern
 	final   bool
+	sort    bool
 }
 
 // Matcher is responsible for performing search
@@ -68,6 +69,12 @@ func (m *Matcher) Loop() {
 			}
 			events.Clear()
 		})
+
+		if request.sort != m.sort {
+			m.sort = request.sort
+			m.mergerCache = make(map[string]*Merger)
+			clearChunkCache()
+		}
 
 		// Restart search
 		patternString := request.pattern.AsString()
@@ -133,7 +140,10 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 		return EmptyMerger, false
 	}
 	pattern := request.pattern
-	empty := pattern.IsEmpty()
+	if pattern.IsEmpty() {
+		return PassMerger(&request.chunks, m.tac), false
+	}
+
 	cancelled := util.NewAtomicBool(false)
 
 	slices := m.sliceChunks(request.chunks)
@@ -148,19 +158,14 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 			defer func() { waitGroup.Done() }()
 			sliceMatches := []*Item{}
 			for _, chunk := range chunks {
-				var matches []*Item
-				if empty {
-					matches = *chunk
-				} else {
-					matches = request.pattern.Match(chunk)
-				}
+				matches := request.pattern.Match(chunk)
 				sliceMatches = append(sliceMatches, matches...)
 				if cancelled.Get() {
 					return
 				}
 				countChan <- len(matches)
 			}
-			if !empty && m.sort {
+			if m.sort {
 				if m.tac {
 					sort.Sort(ByRelevanceTac(sliceMatches))
 				} else {
@@ -187,7 +192,7 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 			break
 		}
 
-		if !empty && m.reqBox.Peek(reqReset) {
+		if m.reqBox.Peek(reqReset) {
 			return nil, wait()
 		}
 
@@ -201,11 +206,11 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 		partialResult := <-resultChan
 		partialResults[partialResult.index] = partialResult.matches
 	}
-	return NewMerger(partialResults, !empty && m.sort, m.tac), false
+	return NewMerger(partialResults, m.sort, m.tac), false
 }
 
 // Reset is called to interrupt/signal the ongoing search
-func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final bool) {
+func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final bool, sort bool) {
 	pattern := m.patternBuilder(patternRunes)
 
 	var event util.EventType
@@ -214,5 +219,5 @@ func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final
 	} else {
 		event = reqRetry
 	}
-	m.reqBox.Set(event, MatchRequest{chunks, pattern, final})
+	m.reqBox.Set(event, MatchRequest{chunks, pattern, final, sort})
 }

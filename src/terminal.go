@@ -28,6 +28,9 @@ type Terminal struct {
 	yanked     []rune
 	input      []rune
 	multi      bool
+	toggleSort int
+	expect     []int
+	pressed    int
 	printQuery bool
 	count      int
 	progress   int
@@ -47,17 +50,17 @@ type selectedItem struct {
 	text *string
 }
 
-type ByTimeOrder []selectedItem
+type byTimeOrder []selectedItem
 
-func (a ByTimeOrder) Len() int {
+func (a byTimeOrder) Len() int {
 	return len(a)
 }
 
-func (a ByTimeOrder) Swap(i, j int) {
+func (a byTimeOrder) Swap(i, j int) {
 	a[i], a[j] = a[j], a[i]
 }
 
-func (a ByTimeOrder) Less(i, j int) bool {
+func (a byTimeOrder) Less(i, j int) bool {
 	return a[i].at.Before(a[j].at)
 }
 
@@ -91,6 +94,9 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		yanked:     []rune{},
 		input:      input,
 		multi:      opts.Multi,
+		toggleSort: opts.ToggleSort,
+		expect:     opts.Expect,
+		pressed:    0,
 		printQuery: opts.PrintQuery,
 		merger:     EmptyMerger,
 		selected:   make(map[*string]selectedItem),
@@ -150,6 +156,19 @@ func (t *Terminal) output() {
 	if t.printQuery {
 		fmt.Println(string(t.input))
 	}
+	if len(t.expect) > 0 {
+		if t.pressed == 0 {
+			fmt.Println()
+		} else if util.Between(t.pressed, C.AltA, C.AltZ) {
+			fmt.Printf("alt-%c\n", t.pressed+'a'-C.AltA)
+		} else if util.Between(t.pressed, C.F1, C.F4) {
+			fmt.Printf("f%c\n", t.pressed+'1'-C.F1)
+		} else if util.Between(t.pressed, C.CtrlA, C.CtrlZ) {
+			fmt.Printf("ctrl-%c\n", t.pressed+'a'-C.CtrlA)
+		} else {
+			fmt.Printf("%c\n", t.pressed-C.AltZ)
+		}
+	}
 	if len(t.selected) == 0 {
 		cnt := t.merger.Length()
 		if cnt > 0 && cnt > t.cy {
@@ -160,7 +179,7 @@ func (t *Terminal) output() {
 		for _, sel := range t.selected {
 			sels = append(sels, sel)
 		}
-		sort.Sort(ByTimeOrder(sels))
+		sort.Sort(byTimeOrder(sels))
 		for _, sel := range sels {
 			fmt.Println(*sel.text)
 		}
@@ -251,7 +270,7 @@ func (t *Terminal) printItem(item *Item, current bool) {
 		} else {
 			C.CPrint(C.ColCurrent, true, " ")
 		}
-		t.printHighlighted(item, true, C.ColCurrent, C.ColCurrentMatch)
+		t.printHighlighted(item, true, C.ColCurrent, C.ColCurrentMatch, true)
 	} else {
 		C.CPrint(C.ColCursor, true, " ")
 		if selected {
@@ -259,7 +278,7 @@ func (t *Terminal) printItem(item *Item, current bool) {
 		} else {
 			C.Print(" ")
 		}
-		t.printHighlighted(item, false, 0, C.ColMatch)
+		t.printHighlighted(item, false, 0, C.ColMatch, false)
 	}
 }
 
@@ -299,7 +318,7 @@ func trimLeft(runes []rune, width int) ([]rune, int32) {
 	return runes, trimmed
 }
 
-func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int) {
+func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, current bool) {
 	var maxe int32
 	for _, offset := range item.offsets {
 		if offset[1] > maxe {
@@ -309,7 +328,7 @@ func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int) {
 
 	// Overflow
 	text := []rune(*item.text)
-	offsets := item.offsets
+	offsets := item.colorOffsets(col2, bold, current)
 	maxWidth := C.MaxX() - 3
 	fullWidth := displayWidth(text)
 	if fullWidth > maxWidth {
@@ -328,37 +347,40 @@ func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int) {
 			text, diff = trimLeft(text, maxWidth-2)
 
 			// Transform offsets
-			offsets = make([]Offset, len(item.offsets))
-			for idx, offset := range item.offsets {
-				b, e := offset[0], offset[1]
+			for idx, offset := range offsets {
+				b, e := offset.offset[0], offset.offset[1]
 				b += 2 - diff
 				e += 2 - diff
 				b = util.Max32(b, 2)
-				if b < e {
-					offsets[idx] = Offset{b, e}
-				}
+				offsets[idx].offset[0] = b
+				offsets[idx].offset[1] = util.Max32(b, e)
 			}
 			text = append([]rune(".."), text...)
 		}
 	}
 
-	sort.Sort(ByOrder(offsets))
 	var index int32
 	var substr string
 	var prefixWidth int
+	maxOffset := int32(len(text))
 	for _, offset := range offsets {
-		b := util.Max32(index, offset[0])
-		e := util.Max32(index, offset[1])
+		b := util.Constrain32(offset.offset[0], index, maxOffset)
+		e := util.Constrain32(offset.offset[1], index, maxOffset)
 
 		substr, prefixWidth = processTabs(text[index:b], prefixWidth)
 		C.CPrint(col1, bold, substr)
 
-		substr, prefixWidth = processTabs(text[b:e], prefixWidth)
-		C.CPrint(col2, bold, substr)
+		if b < e {
+			substr, prefixWidth = processTabs(text[b:e], prefixWidth)
+			C.CPrint(offset.color, offset.bold, substr)
+		}
 
 		index = e
+		if index >= maxOffset {
+			break
+		}
 	}
-	if index < int32(len(text)) {
+	if index < maxOffset {
 		substr, _ = processTabs(text[index:], prefixWidth)
 		C.CPrint(col1, bold, substr)
 	}
@@ -435,6 +457,10 @@ func (t *Terminal) rubout(pattern string) {
 	t.cx = findLastMatch(pattern, string(t.input[:t.cx])) + 1
 	t.yanked = copySlice(t.input[t.cx:pcx])
 	t.input = append(t.input[:t.cx], after...)
+}
+
+func keyMatch(key int, event C.Event) bool {
+	return event.Type == key || event.Type == C.Rune && int(event.Char) == key-C.AltZ
 }
 
 // Loop is called to start Terminal I/O
@@ -530,6 +556,20 @@ func (t *Terminal) Loop() {
 					delete(t.selected, item.text)
 				}
 				req(reqInfo)
+			}
+		}
+		for _, key := range t.expect {
+			if keyMatch(key, event) {
+				t.pressed = key
+				req(reqClose)
+				break
+			}
+		}
+		if t.toggleSort > 0 {
+			if keyMatch(t.toggleSort, event) {
+				t.eventBox.Set(EvtSearchNew, true)
+				t.mutex.Unlock()
+				continue
 			}
 		}
 		switch event.Type {
@@ -661,7 +701,7 @@ func (t *Terminal) Loop() {
 		t.mutex.Unlock() // Must be unlocked before touching reqBox
 
 		if changed {
-			t.eventBox.Set(EvtSearchNew, nil)
+			t.eventBox.Set(EvtSearchNew, false)
 		}
 		for _, event := range events {
 			t.reqBox.Set(event, nil)

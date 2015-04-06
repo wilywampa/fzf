@@ -26,6 +26,7 @@ let s:launcher = 'xterm -e bash -ic %s'
 let s:fzf_go = expand('<sfile>:h:h').'/bin/fzf'
 let s:fzf_rb = expand('<sfile>:h:h').'/fzf'
 let s:fzf_tmux = expand('<sfile>:h:h').'/bin/fzf-tmux'
+let s:legacy = 0
 
 let s:cpo_save = &cpo
 set cpo&vim
@@ -40,6 +41,7 @@ function! s:fzf_exec()
         let s:exec = path[0]
       elseif executable(s:fzf_rb)
         let s:exec = s:fzf_rb
+        let s:legacy = 1
       else
         call system('type fzf')
         if v:shell_error
@@ -123,11 +125,15 @@ function! fzf#run(...) abort
   let split = s:tmux_enabled() && s:tmux_splittable(dict)
   let command = prefix.(split ? s:fzf_tmux(dict) : fzf_exec).' '.optstr.' > '.temps.result
 
-  if split
-    return s:execute_tmux(dict, command, temps)
-  else
-    return s:execute(dict, command, temps)
-  endif
+  try
+    if split
+      return s:execute_tmux(dict, command, temps)
+    else
+      return s:execute(dict, command, temps)
+    endif
+  finally
+    call s:popd(dict)
+  endtry
 endfunction
 
 function! s:present(dict, ...)
@@ -158,6 +164,7 @@ function! s:pushd(dict)
   if s:present(a:dict, 'dir')
     let a:dict.prev_dir = getcwd()
     execute 'chdir '.s:escape(a:dict.dir)
+    let a:dict.dir = getcwd()
     return 1
   endif
   return 0
@@ -192,14 +199,6 @@ function! s:execute(dict, command, temps)
   endif
 endfunction
 
-function! s:env_var(name)
-  if exists('$'.a:name)
-    return a:name . "='". substitute(expand('$'.a:name), "'", "'\\\\''", 'g') . "' "
-  else
-    return ''
-  endif
-endfunction
-
 function! s:execute_tmux(dict, command, temps)
   let command = a:command
   if s:pushd(a:dict)
@@ -221,7 +220,7 @@ function! s:callback(dict, temps)
         if type(a:dict.sink) == 2
           call a:dict.sink(line)
         else
-          execute a:dict.sink.' '.s:escape(line)
+          execute a:dict.sink s:escape(line)
         endif
       endfor
     endif
@@ -231,13 +230,14 @@ function! s:callback(dict, temps)
     silent! call delete(tf)
   endfor
 
-  call s:popd(a:dict)
-
   return lines
 endfunction
 
 function! s:cmd(bang, ...) abort
   let args = copy(a:000)
+  if !s:legacy
+    let args = insert(args, '--expect=ctrl-t,ctrl-x,ctrl-v', 0)
+  endif
   let opts = {}
   if len(args) > 0 && isdirectory(expand(args[-1]))
     let opts.dir = remove(args, -1)
@@ -247,7 +247,29 @@ function! s:cmd(bang, ...) abort
   if !a:bang
     let opts.down = get(g:, 'fzf_tmux_height', s:default_tmux_height)
   endif
-  call fzf#run(extend({ 'sink': 'e', 'options': join(args) }, opts))
+
+  if s:legacy
+    call fzf#run(extend({ 'sink': 'e', 'options': join(args) }, opts))
+  else
+    let output = fzf#run(extend({ 'options': join(args) }, opts))
+    if empty(output)
+      return
+    endif
+    let key = remove(output, 0)
+    if     key == 'ctrl-t' | let cmd = 'tabedit'
+    elseif key == 'ctrl-x' | let cmd = 'split'
+    elseif key == 'ctrl-v' | let cmd = 'vsplit'
+    else                   | let cmd = 'e'
+    endif
+    try
+      call s:pushd(opts)
+      for item in output
+        execute cmd s:escape(item)
+      endfor
+    finally
+      call s:popd(opts)
+    endtry
+  endif
 endfunction
 
 command! -nargs=* -complete=dir -bang FZF call s:cmd('<bang>' == '!', <f-args>)

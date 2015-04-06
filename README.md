@@ -40,7 +40,7 @@ Clone this repository and run
 [install](https://github.com/junegunn/fzf/blob/master/install) script.
 
 ```sh
-git clone https://github.com/junegunn/fzf.git ~/.fzf
+git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
 ~/.fzf/install
 ```
 
@@ -60,10 +60,10 @@ curl -L https://github.com/junegunn/fzf/archive/master.tar.gz |
 On OS X, you can use [Homebrew](http://brew.sh/) to install fzf.
 
 ```sh
-brew install fzf
+brew reinstall --HEAD fzf
 
-# Install shell extensions - this should be done whenever fzf is updated
-$(brew info fzf | grep /install)
+# Install shell extensions
+/usr/local/Cellar/fzf/HEAD/install
 ```
 
 #### Install as Vim plugin
@@ -152,6 +152,7 @@ fish.
 
 - `CTRL-T` - Paste the selected file path(s) into the command line
 - `CTRL-R` - Paste the selected command from history into the command line
+    - Sort is disabled by default. Press `CTRL-R` again to toggle sort.
 - `ALT-C` - cd into the selected directory
 
 If you're on a tmux session, `CTRL-T` will launch fzf in a new split-window. You
@@ -275,6 +276,10 @@ If you have set up fzf for Vim, `:FZF` command will be added.
 :FZF --no-sort -m /tmp
 ```
 
+Similarly to [ctrlp.vim](https://github.com/kien/ctrlp.vim), use enter key,
+`CTRL-T`, `CTRL-X` or `CTRL-V` to open selected files in the current window,
+in new tabs, in horizontal splits, or in vertical splits respectively.
+
 Note that the environment variables `FZF_DEFAULT_COMMAND` and `FZF_DEFAULT_OPTS`
 also apply here.
 
@@ -295,7 +300,8 @@ let g:fzf_launcher = 'urxvt -geometry 120x30 -e sh -c %s'
 
 If you're running MacVim on OSX, I recommend you to use iTerm2 as the launcher.
 Refer to the [this wiki
-page](https://github.com/junegunn/fzf/wiki/fzf-with-MacVim-and-iTerm2) to see
+page](https://github.com/junegunn/fzf/wiki/On-MacVim-with-iTerm2) to see
+
 how to set up.
 
 #### `fzf#run([options])`
@@ -418,18 +424,9 @@ If you're running fzf in a large git repository, `git ls-tree` can boost up the
 speed of the traversal.
 
 ```sh
-# Copy the original fzf function to __fzf
-declare -f __fzf > /dev/null ||
-  eval "$(echo "__fzf() {"; declare -f fzf | \grep -v '^{' | tail -n +2)"
-
-# Use git ls-tree when possible
-fzf() {
-  if [ -n "$(git rev-parse HEAD 2> /dev/null)" ]; then
-    FZF_DEFAULT_COMMAND="git ls-tree -r --name-only HEAD" __fzf "$@"
-  else
-    __fzf "$@"
-  fi
-}
+export FZF_DEFAULT_COMMAND='
+  (git ls-tree -r --name-only HEAD ||
+   find * -name ".*" -prune -o -type f -print -o -type l -print) 2> /dev/null'
 ```
 
 #### Using fzf with tmux panes

@@ -44,7 +44,7 @@ func initProcs() {
 /*
 Reader   -> EvtReadFin
 Reader   -> EvtReadNew        -> Matcher  (restart)
-Terminal -> EvtSearchNew      -> Matcher  (restart)
+Terminal -> EvtSearchNew:bool -> Matcher  (restart)
 Matcher  -> EvtSearchProgress -> Terminal (update info)
 Matcher  -> EvtSearchFin      -> Terminal (update list)
 */
@@ -54,6 +54,7 @@ func Run(options *Options) {
 	initProcs()
 
 	opts := ParseOptions()
+	sort := opts.Sort > 0
 
 	if opts.Version {
 		fmt.Println(Version)
@@ -63,14 +64,36 @@ func Run(options *Options) {
 	// Event channel
 	eventBox := util.NewEventBox()
 
+	// ANSI code processor
+	ansiProcessor := func(data *string) (*string, []ansiOffset) {
+		// By default, we do nothing
+		return data, nil
+	}
+	if opts.Ansi {
+		if opts.Color {
+			ansiProcessor = func(data *string) (*string, []ansiOffset) {
+				return extractColor(data)
+			}
+		} else {
+			// When color is disabled but ansi option is given,
+			// we simply strip out ANSI codes from the input
+			ansiProcessor = func(data *string) (*string, []ansiOffset) {
+				trimmed, _ := extractColor(data)
+				return trimmed, nil
+			}
+		}
+	}
+
 	// Chunk list
 	var chunkList *ChunkList
 	if len(opts.WithNth) == 0 {
 		chunkList = NewChunkList(func(data *string, index int) *Item {
+			data, colors := ansiProcessor(data)
 			return &Item{
-				text:  data,
-				index: uint32(index),
-				rank:  Rank{0, 0, uint32(index)}}
+				text:   data,
+				index:  uint32(index),
+				colors: colors,
+				rank:   Rank{0, 0, uint32(index)}}
 		})
 	} else {
 		chunkList = NewChunkList(func(data *string, index int) *Item {
@@ -79,13 +102,18 @@ func Run(options *Options) {
 				text:     Transform(tokens, opts.WithNth).whole,
 				origText: data,
 				index:    uint32(index),
+				colors:   nil,
 				rank:     Rank{0, 0, uint32(index)}}
+
+			trimmed, colors := ansiProcessor(item.text)
+			item.text = trimmed
+			item.colors = colors
 			return &item
 		})
 	}
 
 	// Reader
-	streamingFilter := opts.Filter != nil && opts.Sort == 0 && !opts.Tac && !opts.Sync
+	streamingFilter := opts.Filter != nil && !sort && !opts.Tac && !opts.Sync
 	if !streamingFilter {
 		reader := Reader{func(str string) { chunkList.Push(str) }, eventBox}
 		go reader.ReadSource()
@@ -96,7 +124,7 @@ func Run(options *Options) {
 		return BuildPattern(
 			opts.Mode, opts.Case, opts.Nth, opts.Delimiter, runes)
 	}
-	matcher := NewMatcher(patternBuilder, opts.Sort > 0, opts.Tac, eventBox)
+	matcher := NewMatcher(patternBuilder, sort, opts.Tac, eventBox)
 
 	// Filtering mode
 	if opts.Filter != nil {
@@ -163,11 +191,14 @@ func Run(options *Options) {
 					reading = reading && evt == EvtReadNew
 					snapshot, count := chunkList.Snapshot()
 					terminal.UpdateCount(count, !reading)
-					matcher.Reset(snapshot, terminal.Input(), false, !reading)
+					matcher.Reset(snapshot, terminal.Input(), false, !reading, sort)
 
 				case EvtSearchNew:
+					if value.(bool) {
+						sort = !sort
+					}
 					snapshot, _ := chunkList.Snapshot()
-					matcher.Reset(snapshot, terminal.Input(), true, !reading)
+					matcher.Reset(snapshot, terminal.Input(), true, !reading, sort)
 					delay = false
 
 				case EvtSearchProgress:
@@ -188,6 +219,9 @@ func Run(options *Options) {
 								if opts.Exit0 && count == 0 || opts.Select1 && count == 1 {
 									if opts.PrintQuery {
 										fmt.Println(opts.Query)
+									}
+									if len(opts.Expect) > 0 {
+										fmt.Println()
 									}
 									for i := 0; i < count; i++ {
 										fmt.Println(val.Get(i).AsString())

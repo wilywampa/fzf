@@ -1,6 +1,10 @@
 package fzf
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/junegunn/fzf/src/curses"
+)
 
 func TestDelimiterRegex(t *testing.T) {
 	rx := delimiterRegexp("*")
@@ -64,4 +68,64 @@ func TestIrrelevantNth(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestParseKeys(t *testing.T) {
+	keys := parseKeyChords("ctrl-z,alt-z,f2,@,Alt-a,!,ctrl-G,J,g", "")
+	check := func(key int, expected int) {
+		if key != expected {
+			t.Errorf("%d != %d", key, expected)
+		}
+	}
+	check(len(keys), 9)
+	check(keys[0], curses.CtrlZ)
+	check(keys[1], curses.AltZ)
+	check(keys[2], curses.F2)
+	check(keys[3], curses.AltZ+'@')
+	check(keys[4], curses.AltA)
+	check(keys[5], curses.AltZ+'!')
+	check(keys[6], curses.CtrlA+'g'-'a')
+	check(keys[7], curses.AltZ+'J')
+	check(keys[8], curses.AltZ+'g')
+}
+
+func TestParseKeysWithComma(t *testing.T) {
+	check := func(key int, expected int) {
+		if key != expected {
+			t.Errorf("%d != %d", key, expected)
+		}
+	}
+
+	keys := parseKeyChords(",", "")
+	check(len(keys), 1)
+	check(keys[0], curses.AltZ+',')
+
+	keys = parseKeyChords(",,a,b", "")
+	check(len(keys), 3)
+	check(keys[0], curses.AltZ+'a')
+	check(keys[1], curses.AltZ+'b')
+	check(keys[2], curses.AltZ+',')
+
+	keys = parseKeyChords("a,b,,", "")
+	check(len(keys), 3)
+	check(keys[0], curses.AltZ+'a')
+	check(keys[1], curses.AltZ+'b')
+	check(keys[2], curses.AltZ+',')
+
+	keys = parseKeyChords("a,,,b", "")
+	check(len(keys), 3)
+	check(keys[0], curses.AltZ+'a')
+	check(keys[1], curses.AltZ+'b')
+	check(keys[2], curses.AltZ+',')
+
+	keys = parseKeyChords("a,,,b,c", "")
+	check(len(keys), 4)
+	check(keys[0], curses.AltZ+'a')
+	check(keys[1], curses.AltZ+'b')
+	check(keys[2], curses.AltZ+'c')
+	check(keys[3], curses.AltZ+',')
+
+	keys = parseKeyChords(",,,", "")
+	check(len(keys), 1)
+	check(keys[0], curses.AltZ+',')
 }

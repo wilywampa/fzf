@@ -1,6 +1,68 @@
 CHANGELOG
 =========
 
+0.9.7
+-----
+
+### New features
+
+- Added `--toggle-sort` option (#173)
+    - `--toggle-sort=ctrl-r` is applied to `CTRL-R` shell extension
+
+### Bug fixes
+
+- Fixed to print empty line if `--expect` is set and fzf is completed by
+  `--select-1` or `--exit-0` (#172)
+- Fixed to allow comma character as an argument to `--expect` option
+
+0.9.6
+-----
+
+### New features
+
+#### Added `--expect` option (#163)
+
+If you provide a comma-separated list of keys with `--expect` option, fzf will
+allow you to select the match and complete the finder when any of the keys is
+pressed. Additionally, fzf will print the name of the key pressed as the first
+line of the output so that your script can decide what to do next based on the
+information.
+
+```sh
+fzf --expect=ctrl-v,ctrl-t,alt-s,f1,f2,~,@
+```
+
+The updated vim plugin uses this option to implement
+[ctrlp](https://github.com/kien/ctrlp.vim)-compatible key bindings.
+
+### Bug fixes
+
+- Fixed to ignore ANSI escape code `\e[K` (#162)
+
+0.9.5
+-----
+
+### New features
+
+#### Added `--ansi` option (#150)
+
+If you give `--ansi` option to fzf, fzf will interpret ANSI color codes from
+the input, display the item with the ANSI colors (true colors are not
+supported), and strips the codes from the output. This option is off by
+default as it entails some overhead.
+
+### Improvements
+
+#### Reduced initial memory footprint (#151)
+
+By removing unnecessary copy of pointers, fzf will use significantly smaller
+amount of memory when it's started. The difference is hugely noticeable when
+the input is extremely large. (e.g. `locate / | fzf`)
+
+### Bug fixes
+
+- Fixed panic on `--no-sort --filter ''` (#149)
+
 0.9.4
 -----
 

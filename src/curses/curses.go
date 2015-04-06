@@ -61,10 +61,20 @@ const (
 	PgUp
 	PgDn
 
-	AltB
-	AltF
-	AltD
+	F1
+	F2
+	F3
+	F4
+
 	AltBS
+	AltA
+	AltB
+	AltC
+	AltD
+	AltE
+	AltF
+
+	AltZ = AltA + 'z' - 'a'
 )
 
 // Pallete
@@ -78,6 +88,7 @@ const (
 	ColInfo
 	ColCursor
 	ColSelected
+	ColUser
 )
 
 const (
@@ -103,14 +114,17 @@ var (
 	_buf          []byte
 	_in           *os.File
 	_color        func(int, bool) C.int
+	_colorMap     map[int]int
 	_prevDownTime time.Time
 	_prevDownY    int
 	_clickY       []int
+	DarkBG        C.short
 )
 
 func init() {
 	_prevDownTime = time.Unix(0, 0)
 	_clickY = []int{}
+	_colorMap = make(map[int]int)
 }
 
 func attrColored(pair int, bold bool) C.int {
@@ -200,23 +214,25 @@ func Init(color bool, color256 bool, black bool, mouse bool) {
 			bg = -1
 		}
 		if color256 {
+			DarkBG = 236
 			C.init_pair(ColPrompt, 110, bg)
 			C.init_pair(ColMatch, 108, bg)
-			C.init_pair(ColCurrent, 254, 236)
-			C.init_pair(ColCurrentMatch, 151, 236)
+			C.init_pair(ColCurrent, 254, DarkBG)
+			C.init_pair(ColCurrentMatch, 151, DarkBG)
 			C.init_pair(ColSpinner, 148, bg)
 			C.init_pair(ColInfo, 144, bg)
-			C.init_pair(ColCursor, 161, 236)
-			C.init_pair(ColSelected, 168, 236)
+			C.init_pair(ColCursor, 161, DarkBG)
+			C.init_pair(ColSelected, 168, DarkBG)
 		} else {
+			DarkBG = C.COLOR_BLACK
 			C.init_pair(ColPrompt, C.COLOR_BLUE, bg)
 			C.init_pair(ColMatch, C.COLOR_GREEN, bg)
-			C.init_pair(ColCurrent, C.COLOR_YELLOW, C.COLOR_BLACK)
-			C.init_pair(ColCurrentMatch, C.COLOR_GREEN, C.COLOR_BLACK)
+			C.init_pair(ColCurrent, C.COLOR_YELLOW, DarkBG)
+			C.init_pair(ColCurrentMatch, C.COLOR_GREEN, DarkBG)
 			C.init_pair(ColSpinner, C.COLOR_GREEN, bg)
 			C.init_pair(ColInfo, C.COLOR_WHITE, bg)
-			C.init_pair(ColCursor, C.COLOR_RED, C.COLOR_BLACK)
-			C.init_pair(ColSelected, C.COLOR_MAGENTA, C.COLOR_BLACK)
+			C.init_pair(ColCursor, C.COLOR_RED, DarkBG)
+			C.init_pair(ColSelected, C.COLOR_MAGENTA, DarkBG)
 		}
 		_color = attrColored
 	} else {
@@ -318,6 +334,14 @@ func escSequence(sz *int) Event {
 			return Event{CtrlE, 0, nil}
 		case 77:
 			return mouseSequence(sz)
+		case 80:
+			return Event{F1, 0, nil}
+		case 81:
+			return Event{F2, 0, nil}
+		case 82:
+			return Event{F3, 0, nil}
+		case 83:
+			return Event{F4, 0, nil}
 		case 49, 50, 51, 52, 53, 54:
 			if len(_buf) < 4 {
 				return Event{Invalid, 0, nil}
@@ -363,6 +387,9 @@ func escSequence(sz *int) Event {
 			} // _buf[2]
 		} // _buf[2]
 	} // _buf[1]
+	if _buf[1] >= 'a' && _buf[1] <= 'z' {
+		return Event{AltA + int(_buf[1]) - 'a', 0, nil}
+	}
 	return Event{Invalid, 0, nil}
 }
 
@@ -427,4 +454,16 @@ func Endwin() {
 
 func Refresh() {
 	C.refresh()
+}
+
+func PairFor(fg int, bg int) int {
+	key := (fg << 8) + bg
+	if found, prs := _colorMap[key]; prs {
+		return found
+	}
+
+	id := len(_colorMap) + ColUser
+	C.init_pair(C.short(id), C.short(fg), C.short(bg))
+	_colorMap[key] = id
+	return id
 }
