@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/junegunn/i/master/fzf.png" height="170" alt="fzf - a command-line fuzzy finder"> [![travis-ci](https://travis-ci.org/junegunn/fzf.svg?branch=master)](https://travis-ci.org/junegunn/fzf)
+<img src="https://raw.githubusercontent.com/junegunn/i/master/fzf.png" height="170" alt="fzf - a command-line fuzzy finder"> [![travis-ci](https://travis-ci.org/junegunn/fzf.svg?branch=master)](https://travis-ci.org/junegunn/fzf) <a href="http://flattr.com/thing/3115381/junegunnfzf-on-GitHub" target="_blank"><img src="http://api.flattr.com/button/flattr-badge-large.png" alt="Flattr this" title="Flattr this" border="0" /></a>
 ===
 
 fzf is a general-purpose command-line fuzzy finder.
@@ -16,7 +16,7 @@ Pros
 - The most comprehensive feature set
     - Try `fzf --help` and be surprised
 - Batteries included
-    - Vim plugin, key bindings and fuzzy auto-completion
+    - Vim/Neovim plugin, key bindings and fuzzy auto-completion
 
 Installation
 ------------
@@ -28,6 +28,7 @@ fzf project consists of the followings:
 - Shell extensions
     - Key bindings (`CTRL-T`, `CTRL-R`, and `ALT-C`) (bash, zsh, fish)
     - Fuzzy auto-completion (bash only)
+- Vim/Neovim plugin
 
 You can [download fzf executable][bin] alone, but it's recommended that you
 install the extra stuff using the attached install script.
@@ -88,7 +89,7 @@ while. Please follow the instruction below depending on the installation
 method.
 
 - git: `cd ~/.fzf && git pull && ./install`
-- brew: `brew update && brew upgrade fzf && $(brew info fzf | grep /install)`
+- brew: `brew reinstall --HEAD fzf`
 - vim-plug: `:PlugUpdate fzf`
 
 Usage
@@ -152,7 +153,8 @@ fish.
 
 - `CTRL-T` - Paste the selected file path(s) into the command line
 - `CTRL-R` - Paste the selected command from history into the command line
-    - Sort is disabled by default. Press `CTRL-R` again to toggle sort.
+    - Sort is disabled by default to respect chronological ordering
+    - Press `CTRL-R` again to toggle sort
 - `ALT-C` - cd into the selected directory
 
 If you're on a tmux session, `CTRL-T` will launch fzf in a new split-window. You
@@ -300,9 +302,8 @@ let g:fzf_launcher = 'urxvt -geometry 120x30 -e sh -c %s'
 
 If you're running MacVim on OSX, I recommend you to use iTerm2 as the launcher.
 Refer to the [this wiki
-page](https://github.com/junegunn/fzf/wiki/On-MacVim-with-iTerm2) to see
-
-how to set up.
+page](https://github.com/junegunn/fzf/wiki/On-MacVim-with-iTerm2) to see how
+to set up.
 
 #### `fzf#run([options])`
 
@@ -317,10 +318,15 @@ of the selected items.
 | `source`                   | list          | Vim list as input to fzf                                         |
 | `sink`                     | string        | Vim command to handle the selected item (e.g. `e`, `tabe`)       |
 | `sink`                     | funcref       | Reference to function to process each selected item              |
+| `sink*`                    | funcref       | Similar to `sink`, but takes the list of output lines at once    |
 | `options`                  | string        | Options to fzf                                                   |
 | `dir`                      | string        | Working directory                                                |
 | `up`/`down`/`left`/`right` | number/string | Use tmux pane with the given size (e.g. `20`, `50%`)             |
+| `window` (*Neovim only*)   | string        | Command to open fzf window (e.g. `vertical aboveleft 30new`)     |
 | `launcher`                 | string        | External terminal emulator to start fzf with (Only used in GVim) |
+
+_However on Neovim `fzf#run` is asynchronous and does not return values so you
+should use `sink` or `sink*` to process the output from fzf._
 
 ##### Examples
 
@@ -358,22 +364,22 @@ handy mapping that selects an open buffer.
 
 ```vim
 " List of buffers
-function! BufList()
+function! s:buflist()
   redir => ls
   silent ls
   redir END
   return split(ls, '\n')
 endfunction
 
-function! BufOpen(e)
-  execute 'buffer '. matchstr(a:e, '^[ 0-9]*')
+function! s:bufopen(e)
+  execute 'buffer' matchstr(a:e, '^[ 0-9]*')
 endfunction
 
 nnoremap <silent> <Leader><Enter> :call fzf#run({
-\   'source':  reverse(BufList()),
-\   'sink':    function('BufOpen'),
+\   'source':  reverse(<sid>buflist()),
+\   'sink':    function('<sid>bufopen'),
 \   'options': '+m',
-\   'down':    '40%'
+\   'down':    len(<sid>buflist()) + 2
 \ })<CR>
 ```
 
