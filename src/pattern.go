@@ -4,11 +4,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/junegunn/fzf/src/algo"
 )
-
-const uppercaseLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 // fuzzy
 // 'exact
@@ -44,7 +43,7 @@ type Pattern struct {
 	hasInvTerm    bool
 	delimiter     *regexp.Regexp
 	nth           []Range
-	procFun       map[termType]func(bool, *string, []rune) (int, int)
+	procFun       map[termType]func(bool, *[]rune, []rune) (int, int)
 }
 
 var (
@@ -91,7 +90,14 @@ func BuildPattern(mode Mode, caseMode Case,
 
 	switch caseMode {
 	case CaseSmart:
-		if !strings.ContainsAny(asString, uppercaseLetters) {
+		hasUppercase := false
+		for _, r := range runes {
+			if unicode.IsUpper(r) {
+				hasUppercase = true
+				break
+			}
+		}
+		if !hasUppercase {
 			runes, caseSensitive = []rune(strings.ToLower(asString)), false
 		}
 	case CaseIgnore:
@@ -116,7 +122,7 @@ func BuildPattern(mode Mode, caseMode Case,
 		hasInvTerm:    hasInvTerm,
 		nth:           nth,
 		delimiter:     delimiter,
-		procFun:       make(map[termType]func(bool, *string, []rune) (int, int))}
+		procFun:       make(map[termType]func(bool, *[]rune, []rune) (int, int))}
 
 	ptr.procFun[termFuzzy] = algo.FuzzyMatch
 	ptr.procFun[termExact] = algo.ExactMatchNaive
@@ -294,28 +300,27 @@ func (p *Pattern) extendedMatch(item *Item) []Offset {
 	return offsets
 }
 
-func (p *Pattern) prepareInput(item *Item) *Transformed {
+func (p *Pattern) prepareInput(item *Item) *[]Token {
 	if item.transformed != nil {
 		return item.transformed
 	}
 
-	var ret *Transformed
+	var ret *[]Token
 	if len(p.nth) > 0 {
 		tokens := Tokenize(item.text, p.delimiter)
 		ret = Transform(tokens, p.nth)
 	} else {
-		trans := Transformed{
-			whole: item.text,
-			parts: []Token{Token{text: item.text, prefixLength: 0}}}
+		runes := []rune(*item.text)
+		trans := []Token{Token{text: &runes, prefixLength: 0}}
 		ret = &trans
 	}
 	item.transformed = ret
 	return ret
 }
 
-func (p *Pattern) iter(pfun func(bool, *string, []rune) (int, int),
-	inputs *Transformed, pattern []rune) (int, int) {
-	for _, part := range inputs.parts {
+func (p *Pattern) iter(pfun func(bool, *[]rune, []rune) (int, int),
+	tokens *[]Token, pattern []rune) (int, int) {
+	for _, part := range *tokens {
 		prefixLength := part.prefixLength
 		if sidx, eidx := pfun(p.caseSensitive, part.text, pattern); sidx >= 0 {
 			return sidx + prefixLength, eidx + prefixLength

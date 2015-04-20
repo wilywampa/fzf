@@ -19,6 +19,14 @@ func Max(first int, items ...int) int {
 	return max
 }
 
+// Max32 returns the smallest 32-bit integer
+func Min32(first int32, second int32) int32 {
+	if first <= second {
+		return first
+	}
+	return second
+}
+
 // Max32 returns the largest 32-bit integer
 func Max32(first int32, second int32) int32 {
 	if first > second {
@@ -68,4 +76,15 @@ func Between(val int, min int, max int) bool {
 // IsTty returns true is stdin is a terminal
 func IsTty() bool {
 	return int(C.isatty(C.int(os.Stdin.Fd()))) != 0
+}
+
+func TrimRight(runes *[]rune) []rune {
+	var i int
+	for i = len(*runes) - 1; i >= 0; i-- {
+		char := (*runes)[i]
+		if char != ' ' && char != '\t' {
+			break
+		}
+	}
+	return (*runes)[0 : i+1]
 }

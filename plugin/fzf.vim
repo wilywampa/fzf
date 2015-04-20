@@ -21,12 +21,13 @@
 " OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 " WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-let s:default_tmux_height = '40%'
+let s:default_height = '40%'
 let s:launcher = 'xterm -e bash -ic %s'
 let s:fzf_go = expand('<sfile>:h:h').'/bin/fzf'
+let s:install = expand('<sfile>:h:h').'/install'
+let s:installed = 0
 let s:fzf_rb = expand('<sfile>:h:h').'/fzf'
 let s:fzf_tmux = expand('<sfile>:h:h').'/bin/fzf-tmux'
-let s:legacy = 0
 
 let s:cpo_save = &cpo
 set cpo&vim
@@ -39,9 +40,15 @@ function! s:fzf_exec()
       let path = split(system('which fzf 2> /dev/null'), '\n')
       if !v:shell_error && !empty(path)
         let s:exec = path[0]
+      elseif !s:installed && executable(s:install)
+        echohl WarningMsg
+        echo 'Downloading fzf binary. Please wait ...'
+        echohl None
+        let s:installed = 1
+        call system(s:install.' --bin')
+        return s:fzf_exec()
       elseif executable(s:fzf_rb)
         let s:exec = s:fzf_rb
-        let s:legacy = 1
       else
         call system('type fzf')
         if v:shell_error
@@ -101,7 +108,7 @@ function! fzf#run(...) abort
   if has('nvim') && bufexists('[FZF]')
     echohl WarningMsg
     echomsg 'FZF is already running!'
-    echohl NONE
+    echohl None
     return []
   endif
   let dict   = exists('a:1') ? s:upgrade(a:1) : {}
@@ -310,31 +317,26 @@ function! s:callback(dict, temps)
   return lines
 endfunction
 
+let s:default_action = {
+  \ 'ctrl-m': 'e',
+  \ 'ctrl-t': 'tabedit',
+  \ 'ctrl-x': 'split',
+  \ 'ctrl-v': 'vsplit' }
+
 function! s:cmd_callback(lines) abort
   if empty(a:lines)
     return
   endif
   let key = remove(a:lines, 0)
-  if     key == 'ctrl-t' | let cmd = 'tabedit'
-  elseif key == 'ctrl-x' | let cmd = 'split'
-  elseif key == 'ctrl-v' | let cmd = 'vsplit'
-  else                   | let cmd = 'e'
-  endif
-  call s:pushd(s:opts)
-  try
-    for item in a:lines
-      execute cmd s:escape(item)
-    endfor
-  finally
-    call s:popd(s:opts)
-  endtry
+  let cmd = get(s:action, key, 'e')
+  for item in a:lines
+    execute cmd s:escape(item)
+  endfor
 endfunction
 
 function! s:cmd(bang, ...) abort
-  let args = copy(a:000)
-  if !s:legacy
-    let args = insert(args, '--expect=ctrl-t,ctrl-x,ctrl-v', 0)
-  endif
+  let s:action = get(g:, 'fzf_action', s:default_action)
+  let args = extend(['--expect='.join(keys(s:action), ',')], a:000)
   let opts = {}
   if len(args) > 0 && isdirectory(expand(args[-1]))
     let opts.dir = remove(args, -1)
@@ -342,18 +344,12 @@ function! s:cmd(bang, ...) abort
     let opts.dir = getcwd()
   endif
   if !a:bang
-    let opts.down = get(g:, 'fzf_tmux_height', s:default_tmux_height)
+    let opts.down = get(g:, 'fzf_height', get(g:, 'fzf_tmux_height', s:default_height))
   endif
-
-  if s:legacy
-    call fzf#run(extend({ 'options': join(args), 'sink': 'e' }, opts))
-  else
-    let s:opts = opts
-    call fzf#run(extend({ 'options': join(args), 'sink*': function('<sid>cmd_callback') }, opts))
-  endif
+  call fzf#run(extend({'options': join(args), 'sink*': function('<sid>cmd_callback')}, opts))
 endfunction
 
-command! -nargs=* -complete=dir -bang FZF call s:cmd('<bang>' == '!', <f-args>)
+command! -nargs=* -complete=dir -bang FZF call s:cmd(<bang>0, <f-args>)
 
 let &cpo = s:cpo_save
 unlet s:cpo_save

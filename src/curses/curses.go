@@ -95,6 +95,18 @@ const (
 	doubleClickDuration = 500 * time.Millisecond
 )
 
+type ColorTheme struct {
+	darkBg       C.short
+	prompt       C.short
+	match        C.short
+	current      C.short
+	currentMatch C.short
+	spinner      C.short
+	info         C.short
+	cursor       C.short
+	selected     C.short
+}
+
 type Event struct {
 	Type       int
 	Char       rune
@@ -116,8 +128,10 @@ var (
 	_color        func(int, bool) C.int
 	_colorMap     map[int]int
 	_prevDownTime time.Time
-	_prevDownY    int
 	_clickY       []int
+	Default16     *ColorTheme
+	Dark256       *ColorTheme
+	Light256      *ColorTheme
 	DarkBG        C.short
 )
 
@@ -125,6 +139,36 @@ func init() {
 	_prevDownTime = time.Unix(0, 0)
 	_clickY = []int{}
 	_colorMap = make(map[int]int)
+	Default16 = &ColorTheme{
+		darkBg:       C.COLOR_BLACK,
+		prompt:       C.COLOR_BLUE,
+		match:        C.COLOR_GREEN,
+		current:      C.COLOR_YELLOW,
+		currentMatch: C.COLOR_GREEN,
+		spinner:      C.COLOR_GREEN,
+		info:         C.COLOR_WHITE,
+		cursor:       C.COLOR_RED,
+		selected:     C.COLOR_MAGENTA}
+	Dark256 = &ColorTheme{
+		darkBg:       236,
+		prompt:       110,
+		match:        108,
+		current:      254,
+		currentMatch: 151,
+		spinner:      148,
+		info:         144,
+		cursor:       161,
+		selected:     168}
+	Light256 = &ColorTheme{
+		darkBg:       251,
+		prompt:       25,
+		match:        66,
+		current:      237,
+		currentMatch: 23,
+		spinner:      65,
+		info:         101,
+		cursor:       161,
+		selected:     168}
 }
 
 func attrColored(pair int, bold bool) C.int {
@@ -174,7 +218,7 @@ func getch(nonblock bool) int {
 	return int(b[0])
 }
 
-func Init(color bool, color256 bool, black bool, mouse bool) {
+func Init(theme *ColorTheme, black bool, mouse bool) {
 	{
 		in, err := os.OpenFile("/dev/tty", syscall.O_RDONLY, 0)
 		if err != nil {
@@ -204,40 +248,33 @@ func Init(color bool, color256 bool, black bool, mouse bool) {
 		os.Exit(1)
 	}()
 
-	if color {
+	if theme != nil {
 		C.start_color()
-		var bg C.short
-		if black {
-			bg = C.COLOR_BLACK
-		} else {
-			C.use_default_colors()
-			bg = -1
-		}
-		if color256 {
-			DarkBG = 236
-			C.init_pair(ColPrompt, 110, bg)
-			C.init_pair(ColMatch, 108, bg)
-			C.init_pair(ColCurrent, 254, DarkBG)
-			C.init_pair(ColCurrentMatch, 151, DarkBG)
-			C.init_pair(ColSpinner, 148, bg)
-			C.init_pair(ColInfo, 144, bg)
-			C.init_pair(ColCursor, 161, DarkBG)
-			C.init_pair(ColSelected, 168, DarkBG)
-		} else {
-			DarkBG = C.COLOR_BLACK
-			C.init_pair(ColPrompt, C.COLOR_BLUE, bg)
-			C.init_pair(ColMatch, C.COLOR_GREEN, bg)
-			C.init_pair(ColCurrent, C.COLOR_YELLOW, DarkBG)
-			C.init_pair(ColCurrentMatch, C.COLOR_GREEN, DarkBG)
-			C.init_pair(ColSpinner, C.COLOR_GREEN, bg)
-			C.init_pair(ColInfo, C.COLOR_WHITE, bg)
-			C.init_pair(ColCursor, C.COLOR_RED, DarkBG)
-			C.init_pair(ColSelected, C.COLOR_MAGENTA, DarkBG)
-		}
+		initPairs(theme, black)
 		_color = attrColored
 	} else {
 		_color = attrMono
 	}
+}
+
+func initPairs(theme *ColorTheme, black bool) {
+	var bg C.short
+	if black {
+		bg = C.COLOR_BLACK
+	} else {
+		C.use_default_colors()
+		bg = -1
+	}
+
+	DarkBG = theme.darkBg
+	C.init_pair(ColPrompt, theme.prompt, bg)
+	C.init_pair(ColMatch, theme.match, bg)
+	C.init_pair(ColCurrent, theme.current, DarkBG)
+	C.init_pair(ColCurrentMatch, theme.currentMatch, DarkBG)
+	C.init_pair(ColSpinner, theme.spinner, bg)
+	C.init_pair(ColInfo, theme.info, bg)
+	C.init_pair(ColCursor, theme.cursor, DarkBG)
+	C.init_pair(ColSelected, theme.selected, DarkBG)
 }
 
 func Close() {
@@ -420,6 +457,9 @@ func GetChar() Event {
 		return Event{int(_buf[0]), 0, nil}
 	}
 	r, rsz := utf8.DecodeRune(_buf)
+	if r == utf8.RuneError {
+		return Event{ESC, 0, nil}
+	}
 	sz = rsz
 	return Event{Rune, r, nil}
 }

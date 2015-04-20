@@ -28,16 +28,18 @@ const usage = `usage: fzf [options]
   Search result
     +s, --no-sort         Do not sort the result
         --tac             Reverse the order of the input
-                          (e.g. 'history | fzf --tac --no-sort')
+        --tiebreak=CRI    Sort criterion when the scores are tied;
+                          [length|begin|end|index] (default: length)
 
   Interface
     -m, --multi           Enable multi-select with tab/shift-tab
         --ansi            Enable processing of ANSI color codes
         --no-mouse        Disable mouse
-    +c, --no-color        Disable colors
-    +2, --no-256          Disable 256-color
+        --color=COL       Color scheme; [dark|light|16|bw]
+                          (default: dark on 256-color terminal, otherwise 16)
         --black           Use black background
         --reverse         Reverse orientation
+        --no-hscroll      Disable horizontal scroll
         --prompt=STR      Input prompt (default: '> ')
 
   Scripting
@@ -49,7 +51,6 @@ const usage = `usage: fzf [options]
         --expect=KEYS     Comma-separated list of keys to complete fzf
         --toggle-sort=KEY Key to toggle sort
         --sync            Synchronous search for multi-staged filtering
-                          (e.g. 'fzf --multi | fzf --sync')
 
   Environment variables
     FZF_DEFAULT_COMMAND   Default command to use when input is tty
@@ -77,6 +78,16 @@ const (
 	CaseRespect
 )
 
+// Sort criteria
+type tiebreak int
+
+const (
+	byLength tiebreak = iota
+	byBegin
+	byEnd
+	byIndex
+)
+
 // Options stores the values of command-line options
 type Options struct {
 	Mode       Mode
@@ -86,13 +97,14 @@ type Options struct {
 	Delimiter  *regexp.Regexp
 	Sort       int
 	Tac        bool
+	Tiebreak   tiebreak
 	Multi      bool
 	Ansi       bool
 	Mouse      bool
-	Color      bool
-	Color256   bool
+	Theme      *curses.ColorTheme
 	Black      bool
 	Reverse    bool
+	Hscroll    bool
 	Prompt     string
 	Query      string
 	Select1    bool
@@ -106,6 +118,13 @@ type Options struct {
 }
 
 func defaultOptions() *Options {
+	var defaultTheme *curses.ColorTheme
+	if strings.Contains(os.Getenv("TERM"), "256") {
+		defaultTheme = curses.Dark256
+	} else {
+		defaultTheme = curses.Default16
+	}
+
 	return &Options{
 		Mode:       ModeFuzzy,
 		Case:       CaseSmart,
@@ -114,13 +133,14 @@ func defaultOptions() *Options {
 		Delimiter:  nil,
 		Sort:       1000,
 		Tac:        false,
+		Tiebreak:   byLength,
 		Multi:      false,
 		Ansi:       false,
 		Mouse:      true,
-		Color:      true,
-		Color256:   strings.Contains(os.Getenv("TERM"), "256"),
+		Theme:      defaultTheme,
 		Black:      false,
 		Reverse:    false,
+		Hscroll:    true,
 		Prompt:     "> ",
 		Query:      "",
 		Select1:    false,
@@ -235,6 +255,38 @@ func parseKeyChords(str string, message string) []int {
 	return chords
 }
 
+func parseTiebreak(str string) tiebreak {
+	switch strings.ToLower(str) {
+	case "length":
+		return byLength
+	case "index":
+		return byIndex
+	case "begin":
+		return byBegin
+	case "end":
+		return byEnd
+	default:
+		errorExit("invalid sort criterion: " + str)
+	}
+	return byLength
+}
+
+func parseTheme(str string) *curses.ColorTheme {
+	switch strings.ToLower(str) {
+	case "dark":
+		return curses.Dark256
+	case "light":
+		return curses.Light256
+	case "16":
+		return curses.Default16
+	case "bw", "no":
+		return nil
+	default:
+		errorExit("invalid color scheme: " + str)
+	}
+	return nil
+}
+
 func checkToggleSort(str string) int {
 	keys := parseKeyChords(str, "key name required")
 	if len(keys) != 1 {
@@ -262,6 +314,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Filter = &filter
 		case "--expect":
 			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required")
+		case "--tiebreak":
+			opts.Tiebreak = parseTiebreak(nextString(allArgs, &i, "sort criterion required"))
+		case "--color":
+			opts.Theme = parseTheme(nextString(allArgs, &i, "color scheme name required"))
 		case "--toggle-sort":
 			opts.ToggleSort = checkToggleSort(nextString(allArgs, &i, "key name required"))
 		case "-d", "--delimiter":
@@ -293,9 +349,9 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "--no-mouse":
 			opts.Mouse = false
 		case "+c", "--no-color":
-			opts.Color = false
+			opts.Theme = nil
 		case "+2", "--no-256":
-			opts.Color256 = false
+			opts.Theme = curses.Default16
 		case "--black":
 			opts.Black = true
 		case "--no-black":
@@ -304,6 +360,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Reverse = true
 		case "--no-reverse":
 			opts.Reverse = false
+		case "--hscroll":
+			opts.Hscroll = true
+		case "--no-hscroll":
+			opts.Hscroll = false
 		case "-1", "--select-1":
 			opts.Select1 = true
 		case "+1", "--no-select-1":
@@ -345,6 +405,10 @@ func parseOptions(opts *Options, allArgs []string) {
 				opts.ToggleSort = checkToggleSort(value)
 			} else if match, value := optString(arg, "--expect="); match {
 				opts.Expect = parseKeyChords(value, "key names required")
+			} else if match, value := optString(arg, "--tiebreak="); match {
+				opts.Tiebreak = parseTiebreak(value)
+			} else if match, value := optString(arg, "--color="); match {
+				opts.Theme = parseTheme(value)
 			} else {
 				errorExit("unknown option: " + arg)
 			}

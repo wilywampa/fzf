@@ -22,12 +22,14 @@ import (
 type Terminal struct {
 	prompt     string
 	reverse    bool
+	hscroll    bool
 	cx         int
 	cy         int
 	offset     int
 	yanked     []rune
 	input      []rune
 	multi      bool
+	sort       bool
 	toggleSort int
 	expect     []int
 	pressed    int
@@ -36,7 +38,7 @@ type Terminal struct {
 	progress   int
 	reading    bool
 	merger     *Merger
-	selected   map[*string]selectedItem
+	selected   map[uint32]selectedItem
 	reqBox     *util.EventBox
 	eventBox   *util.EventBox
 	mutex      sync.Mutex
@@ -77,36 +79,33 @@ const (
 	reqQuit
 )
 
-const (
-	initialDelay    = 100 * time.Millisecond
-	spinnerDuration = 200 * time.Millisecond
-)
-
 // NewTerminal returns new Terminal object
 func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 	input := []rune(opts.Query)
 	return &Terminal{
 		prompt:     opts.Prompt,
 		reverse:    opts.Reverse,
+		hscroll:    opts.Hscroll,
 		cx:         len(input),
 		cy:         0,
 		offset:     0,
 		yanked:     []rune{},
 		input:      input,
 		multi:      opts.Multi,
+		sort:       opts.Sort > 0,
 		toggleSort: opts.ToggleSort,
 		expect:     opts.Expect,
 		pressed:    0,
 		printQuery: opts.PrintQuery,
 		merger:     EmptyMerger,
-		selected:   make(map[*string]selectedItem),
+		selected:   make(map[uint32]selectedItem),
 		reqBox:     util.NewEventBox(),
 		eventBox:   eventBox,
 		mutex:      sync.Mutex{},
 		suppress:   true,
 		startChan:  make(chan bool, 1),
 		initFunc: func() {
-			C.Init(opts.Color, opts.Color256, opts.Black, opts.Mouse)
+			C.Init(opts.Theme, opts.Black, opts.Mouse)
 		}}
 }
 
@@ -239,6 +238,13 @@ func (t *Terminal) printInfo() {
 
 	t.move(1, 2, false)
 	output := fmt.Sprintf("%d/%d", t.merger.Length(), t.count)
+	if t.toggleSort > 0 {
+		if t.sort {
+			output += "/S"
+		} else {
+			output += "  "
+		}
+	}
 	if t.multi && len(t.selected) > 0 {
 		output += fmt.Sprintf(" (%d)", len(t.selected))
 	}
@@ -262,7 +268,7 @@ func (t *Terminal) printList() {
 }
 
 func (t *Terminal) printItem(item *Item, current bool) {
-	_, selected := t.selected[item.text]
+	_, selected := t.selected[item.index]
 	if current {
 		C.CPrint(C.ColCursor, true, ">")
 		if selected {
@@ -318,7 +324,7 @@ func trimLeft(runes []rune, width int) ([]rune, int32) {
 	return runes, trimmed
 }
 
-func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, current bool) {
+func (t *Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, current bool) {
 	var maxe int32
 	for _, offset := range item.offsets {
 		if offset[1] > maxe {
@@ -332,30 +338,40 @@ func (*Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, cur
 	maxWidth := C.MaxX() - 3
 	fullWidth := displayWidth(text)
 	if fullWidth > maxWidth {
-		// Stri..
-		matchEndWidth := displayWidth(text[:maxe])
-		if matchEndWidth <= maxWidth-2 {
+		if t.hscroll {
+			// Stri..
+			matchEndWidth := displayWidth(text[:maxe])
+			if matchEndWidth <= maxWidth-2 {
+				text, _ = trimRight(text, maxWidth-2)
+				text = append(text, []rune("..")...)
+			} else {
+				// Stri..
+				if matchEndWidth < fullWidth-2 {
+					text = append(text[:maxe], []rune("..")...)
+				}
+				// ..ri..
+				var diff int32
+				text, diff = trimLeft(text, maxWidth-2)
+
+				// Transform offsets
+				for idx, offset := range offsets {
+					b, e := offset.offset[0], offset.offset[1]
+					b += 2 - diff
+					e += 2 - diff
+					b = util.Max32(b, 2)
+					offsets[idx].offset[0] = b
+					offsets[idx].offset[1] = util.Max32(b, e)
+				}
+				text = append([]rune(".."), text...)
+			}
+		} else {
 			text, _ = trimRight(text, maxWidth-2)
 			text = append(text, []rune("..")...)
-		} else {
-			// Stri..
-			if matchEndWidth < fullWidth-2 {
-				text = append(text[:maxe], []rune("..")...)
-			}
-			// ..ri..
-			var diff int32
-			text, diff = trimLeft(text, maxWidth-2)
 
-			// Transform offsets
 			for idx, offset := range offsets {
-				b, e := offset.offset[0], offset.offset[1]
-				b += 2 - diff
-				e += 2 - diff
-				b = util.Max32(b, 2)
-				offsets[idx].offset[0] = b
-				offsets[idx].offset[1] = util.Max32(b, e)
+				offsets[idx].offset[0] = util.Min32(offset.offset[0], int32(maxWidth-2))
+				offsets[idx].offset[1] = util.Min32(offset.offset[1], int32(maxWidth))
 			}
-			text = append([]rune(".."), text...)
 		}
 	}
 
@@ -544,16 +560,16 @@ func (t *Terminal) Loop() {
 		toggle := func() {
 			if t.cy < t.merger.Length() {
 				item := t.merger.Get(t.cy)
-				if _, found := t.selected[item.text]; !found {
+				if _, found := t.selected[item.index]; !found {
 					var strptr *string
 					if item.origText != nil {
 						strptr = item.origText
 					} else {
 						strptr = item.text
 					}
-					t.selected[item.text] = selectedItem{time.Now(), strptr}
+					t.selected[item.index] = selectedItem{time.Now(), strptr}
 				} else {
-					delete(t.selected, item.text)
+					delete(t.selected, item.index)
 				}
 				req(reqInfo)
 			}
@@ -567,7 +583,8 @@ func (t *Terminal) Loop() {
 		}
 		if t.toggleSort > 0 {
 			if keyMatch(t.toggleSort, event) {
-				t.eventBox.Set(EvtSearchNew, true)
+				t.sort = !t.sort
+				t.eventBox.Set(EvtSearchNew, t.sort)
 				t.mutex.Unlock()
 				continue
 			}
@@ -701,7 +718,7 @@ func (t *Terminal) Loop() {
 		t.mutex.Unlock() // Must be unlocked before touching reqBox
 
 		if changed {
-			t.eventBox.Set(EvtSearchNew, false)
+			t.eventBox.Set(EvtSearchNew, t.sort)
 		}
 		for _, event := range events {
 			t.reqBox.Set(event, nil)

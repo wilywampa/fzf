@@ -4,7 +4,9 @@
 require 'minitest/autorun'
 require 'fileutils'
 
-Dir.chdir File.expand_path('../../', __FILE__)
+base = File.expand_path('../../', __FILE__)
+Dir.chdir base
+FZF = "#{base}/bin/fzf"
 
 class NilClass
   def include? str
@@ -26,7 +28,8 @@ module Temp
     waited = 0
     while waited < 5
       begin
-        data = `cat #{name}`
+        system 'sync'
+        data = File.read(name)
         return data unless data.empty?
       rescue
         sleep 0.1
@@ -195,7 +198,7 @@ class TestBase < Minitest::Test
         nil
       end
     }.compact
-    "fzf #{opts.join ' '}"
+    "#{FZF} #{opts.join ' '}"
   end
 end
 
@@ -243,7 +246,7 @@ class TestGoFZF < TestBase
   end
 
   def test_key_bindings
-    tmux.send_keys "fzf -q 'foo bar foo-bar'", :Enter
+    tmux.send_keys "#{FZF} -q 'foo bar foo-bar'", :Enter
     tmux.until { |lines| lines.last =~ /^>/ }
 
     # CTRL-A
@@ -462,13 +465,76 @@ class TestGoFZF < TestBase
     tmux.send_keys "seq 1 111 | #{fzf '-m +s --tac --toggle-sort=ctrl-r -q11'}", :Enter
     tmux.until { |lines| lines[-3].include? '> 111' }
     tmux.send_keys :Tab
-    tmux.until { |lines| lines[-2].include? '4/111 (1)' }
+    tmux.until { |lines| lines[-2].include? '4/111   (1)' }
     tmux.send_keys 'C-R'
     tmux.until { |lines| lines[-3].include? '> 11' }
     tmux.send_keys :Tab
-    tmux.until { |lines| lines[-2].include? '4/111 (2)' }
+    tmux.until { |lines| lines[-2].include? '4/111/S (2)' }
     tmux.send_keys :Enter
     assert_equal ['111', '11'], readonce.split($/)
+  end
+
+  def test_unicode_case
+    tempname = TEMPNAME + Time.now.to_f.to_s
+    writelines tempname, %w[строКА1 СТРОКА2 строка3 Строка4]
+    assert_equal %w[СТРОКА2 Строка4], `cat #{tempname} | #{FZF} -fС`.split($/)
+    assert_equal %w[строКА1 СТРОКА2 строка3 Строка4], `cat #{tempname} | #{FZF} -fс`.split($/)
+  rescue
+    File.unlink tempname
+  end
+
+  def test_tiebreak
+    tempname = TEMPNAME + Time.now.to_f.to_s
+    input = %w[
+      --foobar--------
+      -----foobar---
+      ----foobar--
+      -------foobar-
+    ]
+    writelines tempname, input
+
+    assert_equal input, `cat #{tempname} | #{FZF} -ffoobar --tiebreak=index`.split($/)
+
+    by_length = %w[
+      ----foobar--
+      -----foobar---
+      -------foobar-
+      --foobar--------
+    ]
+    assert_equal by_length, `cat #{tempname} | #{FZF} -ffoobar`.split($/)
+    assert_equal by_length, `cat #{tempname} | #{FZF} -ffoobar --tiebreak=length`.split($/)
+
+    by_begin = %w[
+      --foobar--------
+      ----foobar--
+      -----foobar---
+      -------foobar-
+    ]
+    assert_equal by_begin, `cat #{tempname} | #{FZF} -ffoobar --tiebreak=begin`.split($/)
+    assert_equal by_begin, `cat #{tempname} | #{FZF} -f"!z foobar" -x --tiebreak begin`.split($/)
+
+    assert_equal %w[
+      -------foobar-
+      ----foobar--
+      -----foobar---
+      --foobar--------
+    ], `cat #{tempname} | #{FZF} -ffoobar --tiebreak end`.split($/)
+
+    assert_equal input, `cat #{tempname} | #{FZF} -f"!z" -x --tiebreak end`.split($/)
+  rescue
+    File.unlink tempname
+  end
+
+private
+  def writelines path, lines, timeout = 10
+    File.open(path, 'w') do |f|
+      f << lines.join($/)
+      f.sync
+    end
+    since = Time.now
+    while `cat #{path}`.split($/).length != lines.length && (Time.now - since) < 10
+      sleep 0.1
+    end
   end
 end
 
@@ -546,25 +612,29 @@ class TestBash < TestBase
   def test_file_completion
     tmux.send_keys 'mkdir -p /tmp/fzf-test; touch /tmp/fzf-test/{1..100}', :Enter
     tmux.prepare
-    tmux.send_keys 'cat /tmp/fzf-test/10**', :Tab
-    tmux.until { |lines| lines[-1].start_with? '>' }
+    tmux.send_keys 'cat /tmp/fzf-test/10**', :Tab, pane: 0
+    tmux.until(pane: 1) { |lines| lines[-1].start_with? '>' }
     tmux.send_keys :BTab, :BTab, :Enter
-    tmux.until { |lines|
+    tmux.until do |lines|
+      tmux.send_keys 'C-L'
       lines[-1].include?('/tmp/fzf-test/10') &&
       lines[-1].include?('/tmp/fzf-test/100')
-    }
+    end
   end
 
   def test_dir_completion
     tmux.send_keys 'mkdir -p /tmp/fzf-test/d{1..100}; touch /tmp/fzf-test/d55/xxx', :Enter
     tmux.prepare
-    tmux.send_keys 'cd /tmp/fzf-test/**', :Tab
-    tmux.until { |lines| lines[-1].start_with? '>' }
+    tmux.send_keys 'cd /tmp/fzf-test/**', :Tab, pane: 0
+    tmux.until(pane: 1) { |lines| lines[-1].start_with? '>' }
     tmux.send_keys :BTab, :BTab # BTab does not work here
     tmux.send_keys 55
-    tmux.until { |lines| lines[-2].start_with? '  1/' }
+    tmux.until(pane: 1) { |lines| lines[-2].start_with? '  1/' }
     tmux.send_keys :Enter
-    tmux.until { |lines| lines[-1] == 'cd /tmp/fzf-test/d55/' }
+    tmux.until do |lines|
+      tmux.send_keys 'C-L'
+      lines[-1] == 'cd /tmp/fzf-test/d55/'
+    end
     tmux.send_keys :xx
     tmux.until { |lines| lines[-1] == 'cd /tmp/fzf-test/d55/xx' }
 
@@ -584,12 +654,15 @@ class TestBash < TestBase
     lines = tmux.until { |lines| lines[-1].start_with? '[1]' }
     pid = lines[-1].split.last
     tmux.prepare
-    tmux.send_keys 'kill ', :Tab
-    tmux.until { |lines| lines[-1].start_with? '>' }
+    tmux.send_keys 'kill ', :Tab, pane: 0
+    tmux.until(pane: 1) { |lines| lines[-1].start_with? '>' }
     tmux.send_keys 'sleep12345'
-    tmux.until { |lines| lines[-3].include? 'sleep 12345' }
+    tmux.until(pane: 1) { |lines| lines[-3].include? 'sleep 12345' }
     tmux.send_keys :Enter
-    tmux.until { |lines| lines[-1] == "kill #{pid}" }
+    tmux.until do |lines|
+      tmux.send_keys 'C-L'
+      lines[-1] == "kill #{pid}"
+    end
   end
 end
 

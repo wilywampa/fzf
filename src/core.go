@@ -34,9 +34,6 @@ import (
 	"github.com/junegunn/fzf/src/util"
 )
 
-const coordinatorDelayMax time.Duration = 100 * time.Millisecond
-const coordinatorDelayStep time.Duration = 10 * time.Millisecond
-
 func initProcs() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 }
@@ -55,6 +52,7 @@ func Run(options *Options) {
 
 	opts := ParseOptions()
 	sort := opts.Sort > 0
+	rankTiebreak = opts.Tiebreak
 
 	if opts.Version {
 		fmt.Println(Version)
@@ -70,7 +68,7 @@ func Run(options *Options) {
 		return data, nil
 	}
 	if opts.Ansi {
-		if opts.Color {
+		if opts.Theme != nil {
 			ansiProcessor = func(data *string) (*string, []ansiOffset) {
 				return extractColor(data)
 			}
@@ -98,8 +96,9 @@ func Run(options *Options) {
 	} else {
 		chunkList = NewChunkList(func(data *string, index int) *Item {
 			tokens := Tokenize(data, opts.Delimiter)
+			trans := Transform(tokens, opts.WithNth)
 			item := Item{
-				text:     Transform(tokens, opts.WithNth).whole,
+				text:     joinTokens(trans),
 				origText: data,
 				index:    uint32(index),
 				colors:   nil,
@@ -194,8 +193,9 @@ func Run(options *Options) {
 					matcher.Reset(snapshot, terminal.Input(), false, !reading, sort)
 
 				case EvtSearchNew:
-					if value.(bool) {
-						sort = !sort
+					switch val := value.(type) {
+					case bool:
+						sort = val
 					}
 					snapshot, _ := chunkList.Snapshot()
 					matcher.Reset(snapshot, terminal.Input(), true, !reading, sort)

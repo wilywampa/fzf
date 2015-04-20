@@ -1,6 +1,35 @@
 CHANGELOG
 =========
 
+0.9.10
+------
+
+### Improvements
+
+- Performance optimization
+- Less aggressive memoization to limit memory usage
+
+### New features
+
+- Added color scheme for light background: `--color=light`
+
+0.9.9
+-----
+
+### New features
+
+- Added `--tiebreak` option (#191)
+- Added `--no-hscroll` option (#193)
+- Visual indication of `--toggle-sort` (#194)
+
+0.9.8
+-----
+
+### Bug fixes
+
+- Fixed Unicode case handling (#186)
+- Fixed to terminate on RuneError (#185)
+
 0.9.7
 -----
 
