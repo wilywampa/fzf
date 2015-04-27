@@ -22,7 +22,6 @@
 " WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 let s:default_height = '40%'
-let s:launcher = 'xterm -e bash -ic %s'
 let s:fzf_go = expand('<sfile>:h:h').'/bin/fzf'
 let s:install = expand('<sfile>:h:h').'/install'
 let s:installed = 0
@@ -105,6 +104,9 @@ function! s:upgrade(dict)
 endfunction
 
 function! fzf#run(...) abort
+try
+  let oshell = &shell
+  set shell=sh
   if has('nvim') && bufexists('[FZF]')
     echohl WarningMsg
     echomsg 'FZF is already running!'
@@ -149,6 +151,9 @@ function! fzf#run(...) abort
   finally
     call s:popd(dict)
   endtry
+finally
+  let &shell = oshell
+endtry
 endfunction
 
 function! s:present(dict, ...)
@@ -196,12 +201,22 @@ function! s:popd(dict)
   endif
 endfunction
 
+function! s:xterm_launcher()
+  return printf('xterm -T [fzf]'
+    \ .' -bg "\%s" -fg "\%s"'
+    \ .' -geometry %dx%d+%d+%d -e bash -ic %%s',
+    \ synIDattr(hlID("Normal"), "bg"), synIDattr(hlID("Normal"), "fg"),
+    \ &columns, &lines/2, getwinposx(), getwinposy())
+endfunction
+let s:launcher = function('s:xterm_launcher')
+
 function! s:execute(dict, command, temps)
   call s:pushd(a:dict)
   silent! !clear 2> /dev/null
   if has('gui_running')
-    let launcher = get(a:dict, 'launcher', get(g:, 'fzf_launcher', s:launcher))
-    let command = printf(launcher, "'".substitute(a:command, "'", "'\"'\"'", 'g')."'")
+    let Launcher = get(a:dict, 'launcher', get(g:, 'Fzf_launcher', get(g:, 'fzf_launcher', s:launcher)))
+    let fmt = type(Launcher) == 2 ? call(Launcher, []) : Launcher
+    let command = printf(fmt, "'".substitute(a:command, "'", "'\"'\"'", 'g')."'")
   else
     let command = a:command
   endif
@@ -227,6 +242,7 @@ function! s:execute_tmux(dict, command, temps)
   endif
 
   call system(command)
+  redraw!
   return s:callback(a:dict, a:temps)
 endfunction
 
@@ -292,6 +308,7 @@ function! s:execute_term(dict, command, temps)
 endfunction
 
 function! s:callback(dict, temps)
+try
   if !filereadable(a:temps.result)
     let lines = []
   else
@@ -315,6 +332,11 @@ function! s:callback(dict, temps)
   endfor
 
   return lines
+catch
+  if stridx(v:exception, ':E325:') < 0
+    echoerr v:exception
+  endif
+endtry
 endfunction
 
 let s:default_action = {
