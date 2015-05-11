@@ -77,8 +77,10 @@ class Tmux
   end
 
   def close
-    send_keys 'C-c', 'C-u', 'exit', :Enter
-    wait { closed? }
+    wait do
+      send_keys 'C-c', 'C-u', 'exit', :Enter
+      closed?
+    end
   end
 
   def kill
@@ -109,14 +111,22 @@ class Tmux
 
   def until pane = 0
     lines = nil
-    wait do
-      lines = capture(pane)
-      class << lines
-        def item_count
-          self[-2] ? self[-2].strip.split('/').last.to_i : 0
+    begin
+      wait do
+        lines = capture(pane)
+        class << lines
+          def item_count
+            self[-2] ? self[-2].strip.split('/').last.to_i : 0
+          end
         end
+        yield lines
       end
-      yield lines
+    rescue Exception
+      puts $!.backtrace
+      puts '>' * 80
+      puts lines
+      puts '<' * 80
+      raise
     end
     lines
   end
@@ -124,7 +134,7 @@ class Tmux
   def prepare
     tries = 0
     begin
-      self.send_keys 'C-u', 'hello'
+      self.send_keys 'C-u', 'hello', 'Right'
       self.until { |lines| lines[-1].end_with?('hello') }
     rescue Exception
       (tries += 1) < 5 ? retry : raise
@@ -525,7 +535,7 @@ module TestShell
   def test_ctrl_t
     tmux.prepare
     tmux.send_keys 'C-t', pane: 0
-    lines = tmux.until(1) { |lines| lines.item_count > 0 }
+    lines = tmux.until(1) { |lines| lines.item_count > 1 }
     expected = lines.values_at(-3, -4).map { |line| line[2..-1] }.join(' ')
     tmux.send_keys :BTab, :BTab, :Enter, pane: 1
     tmux.until(0) { |lines| lines[-1].include? expected }
@@ -534,7 +544,7 @@ module TestShell
     # FZF_TMUX=0
     new_shell
     tmux.send_keys 'C-t', pane: 0
-    lines = tmux.until(0) { |lines| lines.item_count > 0 }
+    lines = tmux.until(0) { |lines| lines.item_count > 1 }
     expected = lines.values_at(-3, -4).map { |line| line[2..-1] }.join(' ')
     tmux.send_keys :BTab, :BTab, :Enter, pane: 0
     tmux.until(0) { |lines| lines[-1].include? expected }
@@ -570,21 +580,9 @@ module TestShell
   end
 end
 
-class TestBash < TestBase
-  include TestShell
-
-  def new_shell
-    tmux.send_keys "FZF_TMUX=0 #{Shell.bash}", :Enter
-    tmux.prepare
-  end
-
-  def setup
-    super
-    @tmux = Tmux.new :bash
-  end
-
+module CompletionTest
   def test_file_completion
-    tmux.send_keys 'mkdir -p /tmp/fzf-test; touch /tmp/fzf-test/{1..100}', :Enter
+    tmux.send_keys 'mkdir -p /tmp/fzf-test; touch /tmp/fzf-test/{1..100}; touch ~/fzf-home no~such~user', :Enter
     tmux.prepare
     tmux.send_keys 'cat /tmp/fzf-test/10**', :Tab, pane: 0
     tmux.until(1) { |lines| lines.item_count > 0 }
@@ -594,6 +592,30 @@ class TestBash < TestBase
       lines[-1].include?('/tmp/fzf-test/10') &&
       lines[-1].include?('/tmp/fzf-test/100')
     end
+
+    # ~USERNAME**<TAB>
+    tmux.send_keys 'C-u'
+    tmux.send_keys "cat ~#{ENV['USER']}**", :Tab, pane: 0
+    tmux.until(1) { |lines| lines.item_count > 0 }
+    tmux.send_keys 'fzf-home'
+    tmux.until(1) { |lines| lines[-3].end_with? 'fzf-home' }
+    tmux.send_keys :Enter
+    tmux.until do |lines|
+      tmux.send_keys 'C-L'
+      lines[-1].end_with?('fzf-home')
+    end
+
+    # ~INVALID_USERNAME**<TAB>
+    tmux.send_keys 'C-u'
+    tmux.send_keys "cat ~such**", :Tab, pane: 0
+    tmux.until(1) { |lines| lines[-3].end_with? 'no~such~user' }
+    tmux.send_keys :Enter
+    tmux.until do |lines|
+      tmux.send_keys 'C-L'
+      lines[-1].end_with?('no~such~user')
+    end
+  ensure
+    File.unlink 'no~such~user'
   end
 
   def test_dir_completion
@@ -612,9 +634,11 @@ class TestBash < TestBase
     tmux.send_keys :xx
     tmux.until { |lines| lines[-1] == 'cd /tmp/fzf-test/d55/xx' }
 
-    # Should not match regular files
-    tmux.send_keys :Tab
-    tmux.until { |lines| lines[-1] == 'cd /tmp/fzf-test/d55/xx' }
+    # Should not match regular files (bash-only)
+    if self.class == TestBash
+      tmux.send_keys :Tab
+      tmux.until { |lines| lines[-1] == 'cd /tmp/fzf-test/d55/xx' }
+    end
 
     # Fail back to plusdirs
     tmux.send_keys :BSpace, :BSpace, :BSpace
@@ -637,11 +661,29 @@ class TestBash < TestBase
       tmux.send_keys 'C-L'
       lines[-1] == "kill #{pid}"
     end
+  ensure
+    Process.kill 'KILL', pid.to_i rescue nil if pid
+  end
+end
+
+class TestBash < TestBase
+  include TestShell
+  include CompletionTest
+
+  def new_shell
+    tmux.send_keys "FZF_TMUX=0 #{Shell.bash}", :Enter
+    tmux.prepare
+  end
+
+  def setup
+    super
+    @tmux = Tmux.new :bash
   end
 end
 
 class TestZsh < TestBase
   include TestShell
+  include CompletionTest
 
   def new_shell
     tmux.send_keys "FZF_TMUX=0 #{Shell.zsh}", :Enter
