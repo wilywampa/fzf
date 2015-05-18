@@ -12,7 +12,7 @@
 
 _fzf_path_completion() {
   local base lbuf find_opts fzf_opts suffix tail fzf dir leftover matches nnm
-  base=$1
+  base=${(Q)1}
   lbuf=$2
   find_opts=$3
   fzf_opts=$4
@@ -82,7 +82,7 @@ EOF
 
 _fzf_ssh_completion() {
   _fzf_list_completion "$1" "$2" '+m' << "EOF"
-    cat <(cat ~/.ssh/config /etc/ssh/ssh_config 2> /dev/null | \grep -i ^host | \grep -v '*') <(\grep -v '^\s*\(#\|$\)' /etc/hosts | \grep -Fv '0.0.0.0') | awk '{if (length($2) > 0) {print $2}}' | sort -u
+    cat <(cat ~/.ssh/config /etc/ssh/ssh_config 2> /dev/null | \grep -i '^host' | \grep -v '*') <(\grep -v '^\s*\(#\|$\)' /etc/hosts | \grep -Fv '0.0.0.0') | awk '{if (length($2) > 0) {print $2}}' | sort -u
 EOF
 }
 
@@ -102,9 +102,10 @@ fzf-completion() {
   local tokens cmd prefix trigger tail fzf matches lbuf d_cmds
 
   # http://zsh.sourceforge.net/FAQ/zshfaq03.html
-  tokens=(${=LBUFFER})
+  # http://zsh.sourceforge.net/Doc/Release/Expansion.html#Parameter-Expansion-Flags
+  tokens=(${(z)LBUFFER})
   if [ ${#tokens} -lt 1 ]; then
-    zle expand-or-complete
+    eval "zle ${fzf_default_completion:-expand-or-complete}"
     return
   fi
 
@@ -145,9 +146,12 @@ fzf-completion() {
     fi
   # Fall back to default completion
   else
-    zle expand-or-complete
+    eval "zle ${fzf_default_completion:-expand-or-complete}"
   fi
 }
+
+[ -z "$fzf_default_completion" ] &&
+  fzf_default_completion=$(bindkey '^I' | grep -v undefined-key | awk '{print $2}')
 
 zle     -N   fzf-completion
 bindkey '^I' fzf-completion

@@ -76,7 +76,7 @@ function! s:shellesc(arg)
 endfunction
 
 function! s:escape(path)
-  return substitute(a:path, ' ', '\\ ', 'g')
+  return escape(a:path, ' %#\')
 endfunction
 
 " Upgrade legacy options
@@ -193,9 +193,11 @@ function! s:popd(dict)
 endfunction
 
 function! s:xterm_launcher()
-  return printf('xterm -T [fzf]'
-    \ .' -bg "\%s" -fg "\%s"'
-    \ .' -geometry %dx%d+%d+%d -e bash -ic %%s',
+  let fmt = 'xterm -T "[fzf]" -bg "\%s" -fg "\%s" -geometry %dx%d+%d+%d -e bash -ic %%s'
+  if has('gui_macvim')
+    let fmt .= '; osascript -e "tell application \"MacVim\" to activate"'
+  endif
+  return printf(fmt,
     \ synIDattr(hlID("Normal"), "bg"), synIDattr(hlID("Normal"), "fg"),
     \ &columns, &lines/2, getwinposx(), getwinposy())
 endfunction
@@ -270,7 +272,7 @@ function! s:split(dict)
       tabnew
     endif
   finally
-    setlocal winfixwidth winfixheight
+    setlocal winfixwidth winfixheight buftype=nofile bufhidden=wipe nobuflisted
   endtry
 endfunction
 
@@ -281,12 +283,21 @@ function! s:execute_term(dict, command, temps)
   let fzf = { 'buf': bufnr('%'), 'dict': a:dict, 'temps': a:temps }
   function! fzf.on_exit(id, code)
     let tab = tabpagenr()
-    execute 'bd!' self.buf
+    if bufnr('') == self.buf
+      " We use close instead of bd! since Vim does not close the split when
+      " there's no other listed buffer
+      close
+      " FIXME This should be unnecessary due to `bufhidden=wipe` but in some
+      " cases Neovim fails to clean up the buffer and `bufexists('[FZF]')
+      " returns 1 even when it cannot be seen anywhere else. e.g. `FZF!`
+      silent! execute 'bd!' self.buf
+    endif
     if s:ptab == tab
       wincmd p
     endif
     call s:pushd(self.dict)
     try
+      redraw!
       call s:callback(self.dict, self.temps)
     finally
       call s:popd(self.dict)
