@@ -163,4 +163,10 @@ fzf-alt-combined-widget() {
 zle     -N  fzf-alt-combined-widget
 bindkey 'ò' fzf-alt-combined-widget  # <M-r>
 
+fzf-all-history-widget() {
+  FZF_HIST_LIMIT=$HISTSIZE zle fzf-history-widget
+}
+zle     -N  fzf-all-history-widget
+bindkey 'Ò' fzf-all-history-widget  # <M-R>
+
 fi
