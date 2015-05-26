@@ -21,7 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ..
-.TH fzf 1 "April 2015" "fzf 0.9.11" "fzf - a command-line fuzzy finder"
+.TH fzf 1 "May 2015" "fzf 0.9.12" "fzf - a command-line fuzzy finder"
 
 .SH NAME
 fzf - a command-line fuzzy finder
@@ -121,6 +121,51 @@ Display finder info inline with the query
 .TP
 .BI "--prompt=" "STR"
 Input prompt (default: '> ')
+.TP
+.BI "--toggle-sort=" "KEY"
+Key to toggle sort (\fIctrl-[a-z]\fR, \fIalt-[a-z]\fR, \fIf[1-4]\fR,
+or any single character)
+.TP
+.BI "--bind=" "KEYBINDS"
+Comma-separated list of custom key bindings. Each key binding expression
+follows the following format: \fBKEY:ACTION\fR
+.RS
+e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
+.RE
+
+.RS
+.B KEY:
+    \fIctrl-[a-z]\fR, \fIalt-[a-z]\fR, \fIf[1-4]\fR, or any single character
+.RE
+
+.RS
+.B ACTION:
+    abort
+    accept
+    backward-char
+    backward-delete-char
+    backward-kill-word
+    backward-word
+    beginning-of-line
+    clear-screen
+    delete-char
+    down
+    end-of-line
+    forward-char
+    forward-word
+    kill-line (not bound)
+    kill-word
+    page-down
+    page-up
+    toggle (not bound)
+    toggle-down
+    toggle-sort (not bound; equivalent to \fB--toggle-sort\fR)
+    toggle-up
+    unix-line-discard
+    unix-word-rubout
+    up
+    yank
+.RE
 .SS Scripting
 .TP
 .BI "-q, --query=" "STR"
@@ -149,10 +194,6 @@ with the default enter key.
 .RS
 e.g. \fBfzf --expect=ctrl-v,ctrl-t,alt-s,f1,f2,~,@\fR
 .RE
-.TP
-.BI "--toggle-sort=" "KEY"
-Key to toggle sort (\fIctrl-[a-z]\fR, \fIalt-[a-z]\fR, \fIf[1-4]\fR,
-or any single character)
 .TP
 .B "--sync"
 Synchronous search for multi-staged filtering. If specified, fzf will launch

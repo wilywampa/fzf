@@ -439,16 +439,18 @@ class TestGoFZF < TestBase
   end
 
   def test_toggle_sort
-    tmux.send_keys "seq 1 111 | #{fzf '-m +s --tac --toggle-sort=ctrl-r -q11'}", :Enter
-    tmux.until { |lines| lines[-3].include? '> 111' }
-    tmux.send_keys :Tab
-    tmux.until { |lines| lines[-2].include? '4/111   (1)' }
-    tmux.send_keys 'C-R'
-    tmux.until { |lines| lines[-3].include? '> 11' }
-    tmux.send_keys :Tab
-    tmux.until { |lines| lines[-2].include? '4/111/S (2)' }
-    tmux.send_keys :Enter
-    assert_equal ['111', '11'], readonce.split($/)
+    ['--toggle-sort=ctrl-r', '--bind=ctrl-r:toggle-sort'].each do |opt|
+      tmux.send_keys "seq 1 111 | #{fzf "-m +s --tac #{opt} -q11"}", :Enter
+      tmux.until { |lines| lines[-3].include? '> 111' }
+      tmux.send_keys :Tab
+      tmux.until { |lines| lines[-2].include? '4/111   (1)' }
+      tmux.send_keys 'C-R'
+      tmux.until { |lines| lines[-3].include? '> 11' }
+      tmux.send_keys :Tab
+      tmux.until { |lines| lines[-2].include? '4/111/S (2)' }
+      tmux.send_keys :Enter
+      assert_equal ['111', '11'], readonce.split($/)
+    end
   end
 
   def test_unicode_case
@@ -516,6 +518,13 @@ class TestGoFZF < TestBase
     assert_equal 1, `echo Foo bar | #{FZF} -x -f "foo Fbar" | wc -l`.to_i
   end
 
+  def test_bind
+    tmux.send_keys "seq 1 1000 | #{
+      fzf '-m --bind=ctrl-j:accept,u:up,T:toggle-up,t:toggle'}", :Enter
+    tmux.until { |lines| lines[-2].end_with? '/1000' }
+    tmux.send_keys 'uuu', 'TTT', 'tt', 'uu', 'ttt', 'C-j'
+    assert_equal %w[4 5 6 9], readonce.split($/)
+  end
 private
   def writelines path, lines
     File.unlink path while File.exists? path
@@ -585,7 +594,7 @@ module CompletionTest
     FileUtils.mkdir_p '/tmp/fzf-test'
     FileUtils.mkdir_p '/tmp/fzf test'
     (1..100).each { |i| FileUtils.touch "/tmp/fzf-test/#{i}" }
-    ['no~such~user', '/tmp/fzf test/foobar', '~/fzf-home'].each do |f|
+    ['no~such~user', '/tmp/fzf test/foobar', '~/.fzf-home'].each do |f|
       FileUtils.touch File.expand_path(f)
     end
     tmux.prepare
@@ -602,12 +611,12 @@ module CompletionTest
     tmux.send_keys 'C-u'
     tmux.send_keys "cat ~#{ENV['USER']}**", :Tab, pane: 0
     tmux.until(1) { |lines| lines.item_count > 0 }
-    tmux.send_keys 'fzf-home'
-    tmux.until(1) { |lines| lines[-3].end_with? 'fzf-home' }
+    tmux.send_keys '.fzf-home'
+    tmux.until(1) { |lines| lines[-3].end_with? '.fzf-home' }
     tmux.send_keys :Enter
     tmux.until do |lines|
       tmux.send_keys 'C-L'
-      lines[-1].end_with?('fzf-home')
+      lines[-1].end_with?('.fzf-home')
     end
 
     # ~INVALID_USERNAME**<TAB>
@@ -630,7 +639,7 @@ module CompletionTest
       lines[-1].end_with?('/tmp/fzf\ test/foobar')
     end
   ensure
-    ['/tmp/fzf-test', '/tmp/fzf test', '~/fzf-home', 'no~such~user'].each do |f|
+    ['/tmp/fzf-test', '/tmp/fzf test', '~/.fzf-home', 'no~such~user'].each do |f|
       FileUtils.rm_rf File.expand_path(f)
     end
   end

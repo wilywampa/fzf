@@ -42,6 +42,8 @@ const usage = `usage: fzf [options]
         --no-hscroll      Disable horizontal scroll
         --inline-info     Display finder info inline with the query
         --prompt=STR      Input prompt (default: '> ')
+        --toggle-sort=KEY Key to toggle sort
+        --bind=KEYBINDS   Custom key bindings. Refer to the man page.
 
   Scripting
     -q, --query=STR       Start the finder with the given query
@@ -50,7 +52,6 @@ const usage = `usage: fzf [options]
     -f, --filter=STR      Filter mode. Do not start interactive finder.
         --print-query     Print query as the first line
         --expect=KEYS     Comma-separated list of keys to complete fzf
-        --toggle-sort=KEY Key to toggle sort
         --sync            Synchronous search for multi-staged filtering
 
   Environment variables
@@ -112,8 +113,9 @@ type Options struct {
 	Select1    bool
 	Exit0      bool
 	Filter     *string
-	ToggleSort int
+	ToggleSort bool
 	Expect     []int
+	Keymap     map[int]actionType
 	PrintQuery bool
 	Sync       bool
 	Version    bool
@@ -149,8 +151,9 @@ func defaultOptions() *Options {
 		Select1:    false,
 		Exit0:      false,
 		Filter:     nil,
-		ToggleSort: 0,
+		ToggleSort: false,
 		Expect:     []int{},
+		Keymap:     defaultKeymap(),
 		PrintQuery: false,
 		Sync:       false,
 		Version:    false}
@@ -290,12 +293,87 @@ func parseTheme(str string) *curses.ColorTheme {
 	return nil
 }
 
-func checkToggleSort(str string) int {
+func parseKeymap(keymap map[int]actionType, toggleSort bool, str string) (map[int]actionType, bool) {
+	for _, pairStr := range strings.Split(str, ",") {
+		fail := func() {
+			errorExit("invalid key binding: " + pairStr)
+		}
+		pair := strings.Split(pairStr, ":")
+		if len(pair) != 2 {
+			fail()
+		}
+		keys := parseKeyChords(pair[0], "key name required")
+		if len(keys) != 1 {
+			fail()
+		}
+		key := keys[0]
+		act := strings.ToLower(pair[1])
+		switch act {
+		case "beginning-of-line":
+			keymap[key] = actBeginningOfLine
+		case "abort":
+			keymap[key] = actAbort
+		case "accept":
+			keymap[key] = actAccept
+		case "backward-char":
+			keymap[key] = actBackwardChar
+		case "backward-delete-char":
+			keymap[key] = actBackwardDeleteChar
+		case "backward-word":
+			keymap[key] = actBackwardWord
+		case "clear-screen":
+			keymap[key] = actClearScreen
+		case "delete-char":
+			keymap[key] = actDeleteChar
+		case "end-of-line":
+			keymap[key] = actEndOfLine
+		case "forward-char":
+			keymap[key] = actForwardChar
+		case "forward-word":
+			keymap[key] = actForwardWord
+		case "kill-line":
+			keymap[key] = actKillLine
+		case "kill-word":
+			keymap[key] = actKillWord
+		case "unix-line-discard", "line-discard":
+			keymap[key] = actUnixLineDiscard
+		case "unix-word-rubout", "word-rubout":
+			keymap[key] = actUnixWordRubout
+		case "yank":
+			keymap[key] = actYank
+		case "backward-kill-word":
+			keymap[key] = actBackwardKillWord
+		case "toggle-down":
+			keymap[key] = actToggleDown
+		case "toggle-up":
+			keymap[key] = actToggleUp
+		case "toggle":
+			keymap[key] = actToggle
+		case "down":
+			keymap[key] = actDown
+		case "up":
+			keymap[key] = actUp
+		case "page-up":
+			keymap[key] = actPageUp
+		case "page-down":
+			keymap[key] = actPageDown
+		case "toggle-sort":
+			keymap[key] = actToggleSort
+			toggleSort = true
+		default:
+			errorExit("unknown action: " + act)
+		}
+	}
+	return keymap, toggleSort
+}
+
+func checkToggleSort(keymap map[int]actionType, str string) map[int]actionType {
 	keys := parseKeyChords(str, "key name required")
 	if len(keys) != 1 {
 		errorExit("multiple keys specified")
 	}
-	return keys[0]
+	keymap[keys[0]] = actToggleSort
+	return keymap
 }
 
 func parseOptions(opts *Options, allArgs []string) {
@@ -319,10 +397,13 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required")
 		case "--tiebreak":
 			opts.Tiebreak = parseTiebreak(nextString(allArgs, &i, "sort criterion required"))
+		case "--bind":
+			opts.Keymap, opts.ToggleSort = parseKeymap(opts.Keymap, opts.ToggleSort, nextString(allArgs, &i, "bind expression required"))
 		case "--color":
 			opts.Theme = parseTheme(nextString(allArgs, &i, "color scheme name required"))
 		case "--toggle-sort":
-			opts.ToggleSort = checkToggleSort(nextString(allArgs, &i, "key name required"))
+			opts.Keymap = checkToggleSort(opts.Keymap, nextString(allArgs, &i, "key name required"))
+			opts.ToggleSort = true
 		case "-d", "--delimiter":
 			opts.Delimiter = delimiterRegexp(nextString(allArgs, &i, "delimiter required"))
 		case "-n", "--nth":
@@ -409,13 +490,16 @@ func parseOptions(opts *Options, allArgs []string) {
 			} else if match, _ := optString(arg, "-s|--sort="); match {
 				opts.Sort = 1 // Don't care
 			} else if match, value := optString(arg, "--toggle-sort="); match {
-				opts.ToggleSort = checkToggleSort(value)
+				opts.Keymap = checkToggleSort(opts.Keymap, value)
+				opts.ToggleSort = true
 			} else if match, value := optString(arg, "--expect="); match {
 				opts.Expect = parseKeyChords(value, "key names required")
 			} else if match, value := optString(arg, "--tiebreak="); match {
 				opts.Tiebreak = parseTiebreak(value)
 			} else if match, value := optString(arg, "--color="); match {
 				opts.Theme = parseTheme(value)
+			} else if match, value := optString(arg, "--bind="); match {
+				opts.Keymap, opts.ToggleSort = parseKeymap(opts.Keymap, opts.ToggleSort, value)
 			} else {
 				errorExit("unknown option: " + arg)
 			}
