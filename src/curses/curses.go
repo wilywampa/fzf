@@ -4,11 +4,6 @@ package curses
 #include <ncurses.h>
 #include <locale.h>
 #cgo LDFLAGS: -lncurses
-void swapOutput() {
-  FILE* temp = stdout;
-  stdout = stderr;
-  stderr = temp;
-}
 */
 import "C"
 
@@ -106,15 +101,18 @@ const (
 )
 
 type ColorTheme struct {
-	darkBg       C.short
-	prompt       C.short
-	match        C.short
-	current      C.short
-	currentMatch C.short
-	spinner      C.short
-	info         C.short
-	cursor       C.short
-	selected     C.short
+	UseDefault   bool
+	Fg           int16
+	Bg           int16
+	DarkBg       int16
+	Prompt       int16
+	Match        int16
+	Current      int16
+	CurrentMatch int16
+	Spinner      int16
+	Info         int16
+	Cursor       int16
+	Selected     int16
 }
 
 type Event struct {
@@ -139,10 +137,14 @@ var (
 	_colorMap     map[int]int
 	_prevDownTime time.Time
 	_clickY       []int
+	_screen       *C.SCREEN
 	Default16     *ColorTheme
 	Dark256       *ColorTheme
 	Light256      *ColorTheme
-	DarkBG        C.short
+	FG            int
+	CurrentFG     int
+	BG            int
+	DarkBG        int
 )
 
 func init() {
@@ -150,35 +152,44 @@ func init() {
 	_clickY = []int{}
 	_colorMap = make(map[int]int)
 	Default16 = &ColorTheme{
-		darkBg:       C.COLOR_BLACK,
-		prompt:       C.COLOR_BLUE,
-		match:        C.COLOR_GREEN,
-		current:      C.COLOR_YELLOW,
-		currentMatch: C.COLOR_GREEN,
-		spinner:      C.COLOR_GREEN,
-		info:         C.COLOR_WHITE,
-		cursor:       C.COLOR_RED,
-		selected:     C.COLOR_MAGENTA}
+		UseDefault:   true,
+		Fg:           15,
+		Bg:           0,
+		DarkBg:       C.COLOR_BLACK,
+		Prompt:       C.COLOR_BLUE,
+		Match:        C.COLOR_GREEN,
+		Current:      C.COLOR_YELLOW,
+		CurrentMatch: C.COLOR_GREEN,
+		Spinner:      C.COLOR_GREEN,
+		Info:         C.COLOR_WHITE,
+		Cursor:       C.COLOR_RED,
+		Selected:     C.COLOR_MAGENTA}
 	Dark256 = &ColorTheme{
-		darkBg:       236,
-		prompt:       110,
-		match:        108,
-		current:      254,
-		currentMatch: 151,
-		spinner:      148,
-		info:         144,
-		cursor:       161,
-		selected:     168}
+		UseDefault:   true,
+		Fg:           15,
+		Bg:           0,
+		DarkBg:       236,
+		Prompt:       110,
+		Match:        108,
+		Current:      254,
+		CurrentMatch: 151,
+		Spinner:      148,
+		Info:         144,
+		Cursor:       161,
+		Selected:     168}
 	Light256 = &ColorTheme{
-		darkBg:       251,
-		prompt:       25,
-		match:        66,
-		current:      237,
-		currentMatch: 23,
-		spinner:      65,
-		info:         101,
-		cursor:       161,
-		selected:     168}
+		UseDefault:   true,
+		Fg:           15,
+		Bg:           0,
+		DarkBg:       251,
+		Prompt:       25,
+		Match:        66,
+		Current:      237,
+		CurrentMatch: 23,
+		Spinner:      65,
+		Info:         101,
+		Cursor:       161,
+		Selected:     168}
 }
 
 func attrColored(pair int, bold bool) C.int {
@@ -239,10 +250,9 @@ func Init(theme *ColorTheme, black bool, mouse bool) {
 		// syscall.Dup2(int(in.Fd()), int(os.Stdin.Fd()))
 	}
 
-	C.swapOutput()
-
 	C.setlocale(C.LC_ALL, C.CString(""))
-	C.initscr()
+	_screen = C.newterm(nil, C.stderr, C.stdin)
+	C.set_term(_screen)
 	if mouse {
 		C.mousemask(C.ALL_MOUSE_EVENTS, nil)
 	}
@@ -268,28 +278,40 @@ func Init(theme *ColorTheme, black bool, mouse bool) {
 }
 
 func initPairs(theme *ColorTheme, black bool) {
-	var bg C.short
+	fg := C.short(theme.Fg)
+	bg := C.short(theme.Bg)
 	if black {
 		bg = C.COLOR_BLACK
-	} else {
-		C.use_default_colors()
+	} else if theme.UseDefault {
+		fg = -1
 		bg = -1
+		C.use_default_colors()
+	}
+	if theme.UseDefault {
+		FG = -1
+		BG = -1
+	} else {
+		FG = int(fg)
+		BG = int(bg)
+		C.assume_default_colors(C.int(theme.Fg), C.int(bg))
 	}
 
-	DarkBG = theme.darkBg
-	C.init_pair(ColPrompt, theme.prompt, bg)
-	C.init_pair(ColMatch, theme.match, bg)
-	C.init_pair(ColCurrent, theme.current, DarkBG)
-	C.init_pair(ColCurrentMatch, theme.currentMatch, DarkBG)
-	C.init_pair(ColSpinner, theme.spinner, bg)
-	C.init_pair(ColInfo, theme.info, bg)
-	C.init_pair(ColCursor, theme.cursor, DarkBG)
-	C.init_pair(ColSelected, theme.selected, DarkBG)
+	CurrentFG = int(theme.Current)
+	DarkBG = int(theme.DarkBg)
+	darkBG := C.short(DarkBG)
+	C.init_pair(ColPrompt, C.short(theme.Prompt), bg)
+	C.init_pair(ColMatch, C.short(theme.Match), bg)
+	C.init_pair(ColCurrent, C.short(theme.Current), darkBG)
+	C.init_pair(ColCurrentMatch, C.short(theme.CurrentMatch), darkBG)
+	C.init_pair(ColSpinner, C.short(theme.Spinner), bg)
+	C.init_pair(ColInfo, C.short(theme.Info), bg)
+	C.init_pair(ColCursor, C.short(theme.Cursor), darkBG)
+	C.init_pair(ColSelected, C.short(theme.Selected), darkBG)
 }
 
 func Close() {
 	C.endwin()
-	C.swapOutput()
+	C.delscreen(_screen)
 }
 
 func GetBytes() []byte {
