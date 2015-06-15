@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"regexp"
 	"sort"
@@ -34,8 +35,10 @@ type Terminal struct {
 	toggleSort bool
 	expect     []int
 	keymap     map[int]actionType
+	execmap    map[int]string
 	pressed    int
 	printQuery bool
+	history    *History
 	count      int
 	progress   int
 	reading    bool
@@ -105,7 +108,10 @@ const (
 	actUnixWordRubout
 	actYank
 	actBackwardKillWord
+	actSelectAll
+	actDeselectAll
 	actToggle
+	actToggleAll
 	actToggleDown
 	actToggleUp
 	actDown
@@ -113,6 +119,9 @@ const (
 	actPageUp
 	actPageDown
 	actToggleSort
+	actPreviousHistory
+	actNextHistory
+	actExecute
 )
 
 func defaultKeymap() map[int]actionType {
@@ -181,8 +190,10 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		toggleSort: opts.ToggleSort,
 		expect:     opts.Expect,
 		keymap:     opts.Keymap,
+		execmap:    opts.Execmap,
 		pressed:    0,
 		printQuery: opts.PrintQuery,
+		history:    opts.History,
 		merger:     EmptyMerger,
 		selected:   make(map[uint32]selectedItem),
 		reqBox:     util.NewEventBox(),
@@ -580,6 +591,17 @@ func keyMatch(key int, event C.Event) bool {
 	return event.Type == key || event.Type == C.Rune && int(event.Char) == key-C.AltZ
 }
 
+func executeCommand(template string, current string) {
+	command := strings.Replace(template, "{}", fmt.Sprintf("%q", current), -1)
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	C.Endwin()
+	cmd.Run()
+	C.Refresh()
+}
+
 // Loop is called to start Terminal I/O
 func (t *Terminal) Loop() {
 	<-t.startChan
@@ -605,6 +627,13 @@ func (t *Terminal) Loop() {
 				t.reqBox.Set(reqRedraw, nil)
 			}
 		}()
+	}
+
+	exit := func(code int) {
+		if code == 0 && t.history != nil {
+			t.history.append(string(t.input))
+		}
+		os.Exit(code)
 	}
 
 	go func() {
@@ -633,10 +662,10 @@ func (t *Terminal) Loop() {
 					case reqClose:
 						C.Close()
 						t.output()
-						os.Exit(0)
+						exit(0)
 					case reqQuit:
 						C.Close()
-						os.Exit(1)
+						exit(1)
 					}
 				}
 				t.placeCursor()
@@ -661,20 +690,22 @@ func (t *Terminal) Loop() {
 				}
 			}
 		}
+		selectItem := func(item *Item) bool {
+			if _, found := t.selected[item.index]; !found {
+				t.selected[item.index] = selectedItem{time.Now(), item.StringPtr()}
+				return true
+			}
+			return false
+		}
+		toggleY := func(y int) {
+			item := t.merger.Get(y)
+			if !selectItem(item) {
+				delete(t.selected, item.index)
+			}
+		}
 		toggle := func() {
 			if t.cy < t.merger.Length() {
-				item := t.merger.Get(t.cy)
-				if _, found := t.selected[item.index]; !found {
-					var strptr *string
-					if item.origText != nil {
-						strptr = item.origText
-					} else {
-						strptr = item.text
-					}
-					t.selected[item.index] = selectedItem{time.Now(), strptr}
-				} else {
-					delete(t.selected, item.index)
-				}
+				toggleY(t.cy)
 				req(reqInfo)
 			}
 		}
@@ -687,13 +718,20 @@ func (t *Terminal) Loop() {
 		}
 
 		action := t.keymap[event.Type]
+		mapkey := event.Type
 		if event.Type == C.Rune {
-			code := int(event.Char) + int(C.AltZ)
-			if act, prs := t.keymap[code]; prs {
+			mapkey = int(event.Char) + int(C.AltZ)
+			if act, prs := t.keymap[mapkey]; prs {
 				action = act
 			}
 		}
 		switch action {
+		case actIgnore:
+		case actExecute:
+			if t.cy >= 0 && t.cy < t.merger.Length() {
+				item := t.merger.Get(t.cy)
+				executeCommand(t.execmap[mapkey], item.AsString())
+			}
 		case actInvalid:
 			t.mutex.Unlock()
 			continue
@@ -725,10 +763,33 @@ func (t *Terminal) Loop() {
 				t.input = append(t.input[:t.cx-1], t.input[t.cx:]...)
 				t.cx--
 			}
+		case actSelectAll:
+			if t.multi {
+				for i := 0; i < t.merger.Length(); i++ {
+					item := t.merger.Get(i)
+					selectItem(item)
+				}
+				req(reqList, reqInfo)
+			}
+		case actDeselectAll:
+			if t.multi {
+				for i := 0; i < t.merger.Length(); i++ {
+					item := t.merger.Get(i)
+					delete(t.selected, item.index)
+				}
+				req(reqList, reqInfo)
+			}
 		case actToggle:
 			if t.multi && t.merger.Length() > 0 {
 				toggle()
 				req(reqList)
+			}
+		case actToggleAll:
+			if t.multi {
+				for i := 0; i < t.merger.Length(); i++ {
+					toggleY(i)
+				}
+				req(reqList, reqInfo)
 			}
 		case actToggleDown:
 			if t.multi && t.merger.Length() > 0 {
@@ -796,6 +857,18 @@ func (t *Terminal) Loop() {
 			prefix := copySlice(t.input[:t.cx])
 			t.input = append(append(prefix, event.Char), t.input[t.cx:]...)
 			t.cx++
+		case actPreviousHistory:
+			if t.history != nil {
+				t.history.override(string(t.input))
+				t.input = []rune(t.history.previous())
+				t.cx = len(t.input)
+			}
+		case actNextHistory:
+			if t.history != nil {
+				t.history.override(string(t.input))
+				t.input = []rune(t.history.next())
+				t.cx = len(t.input)
+			}
 		case actMouse:
 			me := event.MouseEvent
 			mx, my := util.Constrain(me.X-len(t.prompt), 0, len(t.input)), me.Y
@@ -885,7 +958,6 @@ func (t *Terminal) vset(o int) bool {
 func (t *Terminal) maxItems() int {
 	if t.inlineInfo {
 		return C.MaxY() - 1
-	} else {
-		return C.MaxY() - 2
 	}
+	return C.MaxY() - 2
 }

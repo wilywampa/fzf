@@ -1,6 +1,7 @@
 package fzf
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/junegunn/fzf/src/curses"
@@ -71,7 +72,7 @@ func TestIrrelevantNth(t *testing.T) {
 }
 
 func TestParseKeys(t *testing.T) {
-	keys := parseKeyChords("ctrl-z,alt-z,f2,@,Alt-a,!,ctrl-G,J,g", "")
+	keys := parseKeyChords("ctrl-z,alt-z,f2,@,Alt-a,!,ctrl-G,J,g", "", false)
 	check := func(key int, expected int) {
 		if key != expected {
 			t.Errorf("%d != %d", key, expected)
@@ -87,6 +88,20 @@ func TestParseKeys(t *testing.T) {
 	check(keys[6], curses.CtrlA+'g'-'a')
 	check(keys[7], curses.AltZ+'J')
 	check(keys[8], curses.AltZ+'g')
+
+	// Synonyms
+	keys = parseKeyChords("enter,return,space,tab,btab,esc,up,down,left,right", "", true)
+	check(len(keys), 10)
+	check(keys[0], curses.CtrlM)
+	check(keys[1], curses.CtrlM)
+	check(keys[2], curses.AltZ+' ')
+	check(keys[3], curses.Tab)
+	check(keys[4], curses.BTab)
+	check(keys[5], curses.ESC)
+	check(keys[6], curses.Up)
+	check(keys[7], curses.Down)
+	check(keys[8], curses.Left)
+	check(keys[9], curses.Right)
 }
 
 func TestParseKeysWithComma(t *testing.T) {
@@ -96,36 +111,36 @@ func TestParseKeysWithComma(t *testing.T) {
 		}
 	}
 
-	keys := parseKeyChords(",", "")
+	keys := parseKeyChords(",", "", false)
 	check(len(keys), 1)
 	check(keys[0], curses.AltZ+',')
 
-	keys = parseKeyChords(",,a,b", "")
+	keys = parseKeyChords(",,a,b", "", false)
 	check(len(keys), 3)
 	check(keys[0], curses.AltZ+'a')
 	check(keys[1], curses.AltZ+'b')
 	check(keys[2], curses.AltZ+',')
 
-	keys = parseKeyChords("a,b,,", "")
+	keys = parseKeyChords("a,b,,", "", false)
 	check(len(keys), 3)
 	check(keys[0], curses.AltZ+'a')
 	check(keys[1], curses.AltZ+'b')
 	check(keys[2], curses.AltZ+',')
 
-	keys = parseKeyChords("a,,,b", "")
+	keys = parseKeyChords("a,,,b", "", false)
 	check(len(keys), 3)
 	check(keys[0], curses.AltZ+'a')
 	check(keys[1], curses.AltZ+'b')
 	check(keys[2], curses.AltZ+',')
 
-	keys = parseKeyChords("a,,,b,c", "")
+	keys = parseKeyChords("a,,,b,c", "", false)
 	check(len(keys), 4)
 	check(keys[0], curses.AltZ+'a')
 	check(keys[1], curses.AltZ+'b')
 	check(keys[2], curses.AltZ+'c')
 	check(keys[3], curses.AltZ+',')
 
-	keys = parseKeyChords(",,,", "")
+	keys = parseKeyChords(",,,", "", false)
 	check(len(keys), 1)
 	check(keys[0], curses.AltZ+',')
 }
@@ -136,11 +151,19 @@ func TestBind(t *testing.T) {
 			t.Errorf("%d != %d", action, expected)
 		}
 	}
+	checkString := func(action string, expected string) {
+		if action != expected {
+			t.Errorf("%d != %d", action, expected)
+		}
+	}
 	keymap := defaultKeymap()
+	execmap := make(map[int]string)
 	check(actBeginningOfLine, keymap[curses.CtrlA])
-	keymap, toggleSort :=
-		parseKeymap(keymap, false,
-			"ctrl-a:kill-line,ctrl-b:toggle-sort,c:page-up,alt-z:page-down")
+	keymap, execmap, toggleSort :=
+		parseKeymap(keymap, execmap, false,
+			"ctrl-a:kill-line,ctrl-b:toggle-sort,c:page-up,alt-z:page-down,"+
+				"f1:execute(ls {}),f2:execute/echo {}, {}, {}/,f3:execute[echo '({})'],f4:execute:less {}:,"+
+				"alt-a:execute@echo (,),[,],/,:,;,%,{}@,alt-b:execute;echo (,),[,],/,:,@,%,{};")
 	if !toggleSort {
 		t.Errorf("toggleSort not set")
 	}
@@ -148,8 +171,24 @@ func TestBind(t *testing.T) {
 	check(actToggleSort, keymap[curses.CtrlB])
 	check(actPageUp, keymap[curses.AltZ+'c'])
 	check(actPageDown, keymap[curses.AltZ])
+	check(actExecute, keymap[curses.F1])
+	check(actExecute, keymap[curses.F2])
+	check(actExecute, keymap[curses.F3])
+	check(actExecute, keymap[curses.F4])
+	checkString("ls {}", execmap[curses.F1])
+	checkString("echo {}, {}, {}", execmap[curses.F2])
+	checkString("echo '({})'", execmap[curses.F3])
+	checkString("less {}", execmap[curses.F4])
+	checkString("echo (,),[,],/,:,;,%,{}", execmap[curses.AltA])
+	checkString("echo (,),[,],/,:,@,%,{}", execmap[curses.AltB])
 
-	keymap, toggleSort = parseKeymap(keymap, false, "f1:abort")
+	for idx, char := range []rune{'~', '!', '@', '#', '$', '%', '^', '&', '*', '|', ':', ';', '/'} {
+		keymap, execmap, toggleSort =
+			parseKeymap(keymap, execmap, false, fmt.Sprintf("%d:execute%cfoobar%c", idx%10, char, char))
+		checkString("foobar", execmap[curses.AltZ+int([]rune(fmt.Sprintf("%d", idx%10))[0])])
+	}
+
+	keymap, execmap, toggleSort = parseKeymap(keymap, execmap, false, "f1:abort")
 	if toggleSort {
 		t.Errorf("toggleSort set")
 	}
