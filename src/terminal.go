@@ -33,12 +33,13 @@ type Terminal struct {
 	multi      bool
 	sort       bool
 	toggleSort bool
-	expect     []int
+	expect     map[int]string
 	keymap     map[int]actionType
 	execmap    map[int]string
-	pressed    int
+	pressed    string
 	printQuery bool
 	history    *History
+	cycle      bool
 	count      int
 	progress   int
 	reading    bool
@@ -137,6 +138,7 @@ func defaultKeymap() map[int]actionType {
 	keymap[C.CtrlE] = actEndOfLine
 	keymap[C.CtrlF] = actForwardChar
 	keymap[C.CtrlH] = actBackwardDeleteChar
+	keymap[C.BSpace] = actBackwardDeleteChar
 	keymap[C.Tab] = actToggleDown
 	keymap[C.BTab] = actToggleUp
 	keymap[C.CtrlJ] = actDown
@@ -191,9 +193,11 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		expect:     opts.Expect,
 		keymap:     opts.Keymap,
 		execmap:    opts.Execmap,
-		pressed:    0,
+		pressed:    "",
 		printQuery: opts.PrintQuery,
 		history:    opts.History,
+		cycle:      opts.Cycle,
+		reading:    true,
 		merger:     EmptyMerger,
 		selected:   make(map[uint32]selectedItem),
 		reqBox:     util.NewEventBox(),
@@ -253,17 +257,7 @@ func (t *Terminal) output() {
 		fmt.Println(string(t.input))
 	}
 	if len(t.expect) > 0 {
-		if t.pressed == 0 {
-			fmt.Println()
-		} else if util.Between(t.pressed, C.AltA, C.AltZ) {
-			fmt.Printf("alt-%c\n", t.pressed+'a'-C.AltA)
-		} else if util.Between(t.pressed, C.F1, C.F4) {
-			fmt.Printf("f%c\n", t.pressed+'1'-C.F1)
-		} else if util.Between(t.pressed, C.CtrlA, C.CtrlZ) {
-			fmt.Printf("ctrl-%c\n", t.pressed+'a'-C.CtrlA)
-		} else {
-			fmt.Printf("%c\n", t.pressed-C.AltZ)
-		}
+		fmt.Println(t.pressed)
 	}
 	if len(t.selected) == 0 {
 		cnt := t.merger.Length()
@@ -627,6 +621,20 @@ func (t *Terminal) Loop() {
 				t.reqBox.Set(reqRedraw, nil)
 			}
 		}()
+
+		// Keep the spinner spinning
+		go func() {
+			for {
+				t.mutex.Lock()
+				reading := t.reading
+				t.mutex.Unlock()
+				if !reading {
+					break
+				}
+				time.Sleep(spinnerDuration)
+				t.reqBox.Set(reqInfo, nil)
+			}
+		}()
 	}
 
 	exit := func(code int) {
@@ -709,9 +717,9 @@ func (t *Terminal) Loop() {
 				req(reqInfo)
 			}
 		}
-		for _, key := range t.expect {
+		for key, ret := range t.expect {
 			if keyMatch(key, event) {
-				t.pressed = key
+				t.pressed = ret
 				req(reqClose)
 				break
 			}
@@ -944,10 +952,22 @@ func (t *Terminal) constrain() {
 
 func (t *Terminal) vmove(o int) {
 	if t.reverse {
-		t.vset(t.cy - o)
-	} else {
-		t.vset(t.cy + o)
+		o *= -1
 	}
+	dest := t.cy + o
+	if t.cycle {
+		max := t.merger.Length() - 1
+		if dest > max {
+			if t.cy == max {
+				dest = 0
+			}
+		} else if dest < 0 {
+			if t.cy == 0 {
+				dest = max
+			}
+		}
+	}
+	t.vset(dest)
 }
 
 func (t *Terminal) vset(o int) bool {

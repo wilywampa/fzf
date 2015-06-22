@@ -156,6 +156,7 @@ class TestBase < Minitest::Test
     File.read(tempname)
   ensure
     File.unlink tempname while File.exists?(tempname)
+    tmux.prepare
   end
 
   def fzf(*opts)
@@ -517,10 +518,10 @@ class TestGoFZF < TestBase
     assert_equal data, `cat #{tempname} | #{FZF} -f .`.chomp
   end
 
-  def test_null
+  def test_read0
     lines = `find .`.split($/)
     assert_equal lines.last, `find . | #{FZF} -e -f "^#{lines.last}$"`.chomp
-    assert_equal lines.last, `find . -print0 | #{FZF} --null -e -f "^#{lines.last}$"`.chomp
+    assert_equal lines.last, `find . -print0 | #{FZF} --read0 -e -f "^#{lines.last}$"`.chomp
   end
 
   def test_select_all_deselect_all_toggle_all
@@ -551,7 +552,7 @@ class TestGoFZF < TestBase
 
     # History with limited number of entries
     File.unlink history_file rescue nil
-    opts = "--history=#{history_file} --history-max=4"
+    opts = "--history=#{history_file} --history-size=4"
     input = %w[00 11 22 33 44].map { |e| e + $/ }
     input.each do |keys|
       tmux.send_keys "seq 100 | #{fzf opts}", :Enter
@@ -596,7 +597,7 @@ class TestGoFZF < TestBase
 
   def test_execute
     output = '/tmp/fzf-test-execute'
-    opts = %[--bind \\"alt-a:execute(echo '[{}]' >> #{output}),alt-b:execute[echo '({}), ({})' >> #{output}],C:execute:echo '({}), [{}], @{}@' >> #{output}:\\"]
+    opts = %[--bind \\"alt-a:execute(echo '[{}]' >> #{output}),alt-b:execute[echo '({}), ({})' >> #{output}],C:execute:echo '({}), [{}], @{}@' >> #{output}\\"]
     tmux.send_keys "seq 100 | #{fzf opts}", :Enter
     tmux.until { |lines| lines[-2].include? '100/100' }
     tmux.send_keys :Escape, :a, :Escape, :a
@@ -613,6 +614,25 @@ class TestGoFZF < TestBase
       File.readlines(output).map(&:chomp)
   ensure
     File.unlink output rescue nil
+  end
+
+  def test_cycle
+    tmux.send_keys "seq 8 | #{fzf :cycle}", :Enter
+    tmux.until { |lines| lines[-2].include? '8/8' }
+    tmux.send_keys :Down
+    tmux.until { |lines| lines[-10].start_with? '>' }
+    tmux.send_keys :Down
+    tmux.until { |lines| lines[-9].start_with? '>' }
+    tmux.send_keys :PgUp
+    tmux.until { |lines| lines[-10].start_with? '>' }
+    tmux.send_keys :PgUp
+    tmux.until { |lines| lines[-3].start_with? '>' }
+    tmux.send_keys :Up
+    tmux.until { |lines| lines[-4].start_with? '>' }
+    tmux.send_keys :PgDn
+    tmux.until { |lines| lines[-3].start_with? '>' }
+    tmux.send_keys :PgDn
+    tmux.until { |lines| lines[-10].start_with? '>' }
   end
 
 private
@@ -653,7 +673,7 @@ module TestShell
   def test_alt_c
     tmux.prepare
     tmux.send_keys :Escape, :c, pane: 0
-    lines = tmux.until(1) { |lines| lines.item_count > 0 }
+    lines = tmux.until(1) { |lines| lines.item_count > 0 && lines[-3][2..-1] }
     expected = lines[-3][2..-1]
     tmux.send_keys :Enter, pane: 1
     tmux.prepare

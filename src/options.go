@@ -23,7 +23,7 @@ const usage = `usage: fzf [options]
     -n, --nth=N[,..]      Comma-separated list of field index expressions
                           for limiting search scope. Each can be a non-zero
                           integer or a range expression ([BEGIN]..[END])
-        --with-nth=N[,..] Transform the item using index expressions for search
+        --with-nth=N[,..] Transform item using index expressions within finder
     -d, --delimiter=STR   Field delimiter regex for --nth (default: AWK-style)
     +s, --no-sort         Do not sort the result
         --tac             Reverse the order of the input
@@ -37,20 +37,19 @@ const usage = `usage: fzf [options]
         --color=COLSPEC   Base scheme (dark|light|16|bw) and/or custom colors
         --black           Use black background
         --reverse         Reverse orientation
+        --cycle           Enable cyclic scroll
         --no-hscroll      Disable horizontal scroll
         --inline-info     Display finder info inline with the query
         --prompt=STR      Input prompt (default: '> ')
-        --toggle-sort=KEY Key to toggle sort
         --bind=KEYBINDS   Custom key bindings. Refer to the man page.
         --history=FILE    History file
-        --history-max=N   Maximum number of history entries (default: 1000)
+        --history-size=N  Maximum number of history entries (default: 1000)
 
   Scripting
     -q, --query=STR       Start the finder with the given query
     -1, --select-1        Automatically select the only match
     -0, --exit-0          Exit immediately when there's no match
     -f, --filter=STR      Filter mode. Do not start interactive finder.
-        --null            Read null-byte separated strings from input
         --print-query     Print query as the first line
         --expect=KEYS     Comma-separated list of keys to complete fzf
         --sync            Synchronous search for multi-staged filtering
@@ -107,6 +106,7 @@ type Options struct {
 	Theme      *curses.ColorTheme
 	Black      bool
 	Reverse    bool
+	Cycle      bool
 	Hscroll    bool
 	InlineInfo bool
 	Prompt     string
@@ -115,7 +115,7 @@ type Options struct {
 	Exit0      bool
 	Filter     *string
 	ToggleSort bool
-	Expect     []int
+	Expect     map[int]string
 	Keymap     map[int]actionType
 	Execmap    map[int]string
 	PrintQuery bool
@@ -148,6 +148,7 @@ func defaultOptions() *Options {
 		Theme:      defaultTheme(),
 		Black:      false,
 		Reverse:    false,
+		Cycle:      false,
 		Hscroll:    true,
 		InlineInfo: false,
 		Prompt:     "> ",
@@ -156,7 +157,7 @@ func defaultOptions() *Options {
 		Exit0:      false,
 		Filter:     nil,
 		ToggleSort: false,
-		Expect:     []int{},
+		Expect:     make(map[int]string),
 		Keymap:     defaultKeymap(),
 		Execmap:    make(map[int]string),
 		PrintQuery: false,
@@ -262,7 +263,7 @@ func isAlphabet(char uint8) bool {
 	return char >= 'a' && char <= 'z'
 }
 
-func parseKeyChords(str string, message string, bind bool) []int {
+func parseKeyChords(str string, message string) map[int]string {
 	if len(str) == 0 {
 		errorExit(message)
 	}
@@ -272,36 +273,51 @@ func parseKeyChords(str string, message string, bind bool) []int {
 		tokens = append(tokens, ",")
 	}
 
-	var chords []int
+	chords := make(map[int]string)
 	for _, key := range tokens {
 		if len(key) == 0 {
 			continue // ignore
 		}
 		lkey := strings.ToLower(key)
 		chord := 0
-		if bind {
-			switch lkey {
-			case "up":
-				chord = curses.Up
-			case "down":
-				chord = curses.Down
-			case "left":
-				chord = curses.Left
-			case "right":
-				chord = curses.Right
-			case "enter", "return":
-				chord = curses.CtrlM
-			case "space":
-				chord = curses.AltZ + int(' ')
-			case "tab":
-				chord = curses.Tab
-			case "btab":
-				chord = curses.BTab
-			case "esc":
-				chord = curses.ESC
-			}
-		}
-		if chord == 0 {
+		switch lkey {
+		case "up":
+			chord = curses.Up
+		case "down":
+			chord = curses.Down
+		case "left":
+			chord = curses.Left
+		case "right":
+			chord = curses.Right
+		case "enter", "return":
+			chord = curses.CtrlM
+		case "space":
+			chord = curses.AltZ + int(' ')
+		case "bspace", "bs":
+			chord = curses.BSpace
+		case "alt-bs", "alt-bspace":
+			chord = curses.AltBS
+		case "tab":
+			chord = curses.Tab
+		case "btab", "shift-tab":
+			chord = curses.BTab
+		case "esc":
+			chord = curses.ESC
+		case "del":
+			chord = curses.Del
+		case "home":
+			chord = curses.Home
+		case "end":
+			chord = curses.End
+		case "pgup", "page-up":
+			chord = curses.PgUp
+		case "pgdn", "page-down":
+			chord = curses.PgDn
+		case "shift-left":
+			chord = curses.SLeft
+		case "shift-right":
+			chord = curses.SRight
+		default:
 			if len(key) == 6 && strings.HasPrefix(lkey, "ctrl-") && isAlphabet(lkey[5]) {
 				chord = curses.CtrlA + int(lkey[5]) - 'a'
 			} else if len(key) == 5 && strings.HasPrefix(lkey, "alt-") && isAlphabet(lkey[4]) {
@@ -315,7 +331,7 @@ func parseKeyChords(str string, message string, bind bool) []int {
 			}
 		}
 		if chord > 0 {
-			chords = append(chords, chord)
+			chords[chord] = key
 		}
 	}
 	return chords
@@ -407,12 +423,19 @@ func parseTheme(defaultTheme *curses.ColorTheme, str string) *curses.ColorTheme 
 
 var executeRegexp *regexp.Regexp
 
+func firstKey(keymap map[int]string) int {
+	for k := range keymap {
+		return k
+	}
+	return 0
+}
+
 func parseKeymap(keymap map[int]actionType, execmap map[int]string, toggleSort bool, str string) (map[int]actionType, map[int]string, bool) {
 	if executeRegexp == nil {
 		// Backreferences are not supported.
-		// "~!@#$%^&*:;/|".each_char.map { |c| Regexp.escape(c) }.map { |c| "#{c}[^#{c}]*#{c}" }.join('|')
+		// "~!@#$%^&*;/|".each_char.map { |c| Regexp.escape(c) }.map { |c| "#{c}[^#{c}]*#{c}" }.join('|')
 		executeRegexp = regexp.MustCompile(
-			":execute(\\([^)]*\\)|\\[[^\\]]*\\]|~[^~]*~|![^!]*!|@[^@]*@|\\#[^\\#]*\\#|\\$[^\\$]*\\$|%[^%]*%|\\^[^\\^]*\\^|&[^&]*&|\\*[^\\*]*\\*|:[^:]*:|;[^;]*;|/[^/]*/|\\|[^\\|]*\\|)")
+			"(?s):execute:.*|:execute(\\([^)]*\\)|\\[[^\\]]*\\]|~[^~]*~|![^!]*!|@[^@]*@|\\#[^\\#]*\\#|\\$[^\\$]*\\$|%[^%]*%|\\^[^\\^]*\\^|&[^&]*&|\\*[^\\*]*\\*|;[^;]*;|/[^/]*/|\\|[^\\|]*\\|)")
 	}
 	masked := executeRegexp.ReplaceAllStringFunc(str, func(src string) string {
 		return ":execute(" + strings.Repeat(" ", len(src)-10) + ")"
@@ -430,11 +453,11 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, toggleSort b
 		if len(pair) != 2 {
 			fail()
 		}
-		keys := parseKeyChords(pair[0], "key name required", true)
+		keys := parseKeyChords(pair[0], "key name required")
 		if len(keys) != 1 {
 			fail()
 		}
-		key := keys[0]
+		key := firstKey(keys)
 		act := strings.ToLower(pair[1])
 		switch act {
 		case "ignore":
@@ -503,7 +526,11 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, toggleSort b
 		default:
 			if isExecuteAction(act) {
 				keymap[key] = actExecute
-				execmap[key] = pair[1][8 : len(act)-1]
+				if pair[1][7] == ':' {
+					execmap[key] = pair[1][8:]
+				} else {
+					execmap[key] = pair[1][8 : len(act)-1]
+				}
 			} else {
 				errorExit("unknown action: " + act)
 			}
@@ -518,19 +545,19 @@ func isExecuteAction(str string) bool {
 	}
 	b := str[7]
 	e := str[len(str)-1]
-	if b == e && strings.ContainsAny(string(b), "~!@#$%^&*:;/|") ||
-		b == '(' && e == ')' || b == '[' && e == ']' {
+	if b == ':' || b == '(' && e == ')' || b == '[' && e == ']' ||
+		b == e && strings.ContainsAny(string(b), "~!@#$%^&*;/|") {
 		return true
 	}
 	return false
 }
 
 func checkToggleSort(keymap map[int]actionType, str string) map[int]actionType {
-	keys := parseKeyChords(str, "key name required", true)
+	keys := parseKeyChords(str, "key name required")
 	if len(keys) != 1 {
 		errorExit("multiple keys specified")
 	}
-	keymap[keys[0]] = actToggleSort
+	keymap[firstKey(keys)] = actToggleSort
 	return keymap
 }
 
@@ -575,7 +602,7 @@ func parseOptions(opts *Options, allArgs []string) {
 			filter := nextString(allArgs, &i, "query string required")
 			opts.Filter = &filter
 		case "--expect":
-			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required", false)
+			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required")
 		case "--tiebreak":
 			opts.Tiebreak = parseTiebreak(nextString(allArgs, &i, "sort criterion required"))
 		case "--bind":
@@ -631,6 +658,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Reverse = true
 		case "--no-reverse":
 			opts.Reverse = false
+		case "--cycle":
+			opts.Cycle = true
+		case "--no-cycle":
+			opts.Cycle = false
 		case "--hscroll":
 			opts.Hscroll = true
 		case "--no-hscroll":
@@ -647,8 +678,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Exit0 = true
 		case "+0", "--no-exit-0":
 			opts.Exit0 = false
-		case "--null":
+		case "--read0":
 			opts.ReadZero = true
+		case "--no-read0":
+			opts.ReadZero = false
 		case "--print-query":
 			opts.PrintQuery = true
 		case "--no-print-query":
@@ -665,7 +698,7 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.History = nil
 		case "--history":
 			setHistory(nextString(allArgs, &i, "history file path required"))
-		case "--history-max":
+		case "--history-size":
 			setHistoryMax(nextInt(allArgs, &i, "history max size required"))
 		case "--version":
 			opts.Version = true
@@ -688,7 +721,7 @@ func parseOptions(opts *Options, allArgs []string) {
 				keymap = checkToggleSort(keymap, value)
 				opts.ToggleSort = true
 			} else if match, value := optString(arg, "--expect="); match {
-				opts.Expect = parseKeyChords(value, "key names required", false)
+				opts.Expect = parseKeyChords(value, "key names required")
 			} else if match, value := optString(arg, "--tiebreak="); match {
 				opts.Tiebreak = parseTiebreak(value)
 			} else if match, value := optString(arg, "--color="); match {
@@ -698,7 +731,7 @@ func parseOptions(opts *Options, allArgs []string) {
 					parseKeymap(keymap, opts.Execmap, opts.ToggleSort, value)
 			} else if match, value := optString(arg, "--history="); match {
 				setHistory(value)
-			} else if match, value := optString(arg, "--history-max="); match {
+			} else if match, value := optString(arg, "--history-size="); match {
 				setHistoryMax(atoi(value))
 			} else {
 				errorExit("unknown option: " + arg)
