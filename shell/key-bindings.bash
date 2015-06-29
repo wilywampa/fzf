@@ -1,10 +1,11 @@
 # Key bindings
 # ------------
 __fzf_select__() {
-  command find -L . \( -path '*/\.*' -o -fstype 'dev' -o -fstype 'proc' \) -prune \
+  local cmd="${FZF_CTRL_T_COMMAND:-"command \\find -L . \\( -path '*/\\.*' -o -fstype 'dev' -o -fstype 'proc' \\) -prune \
     -o -type f -print \
     -o -type d -print \
-    -o -type l -print 2> /dev/null | sed 1d | cut -b3- | fzf -m | while read item; do
+    -o -type l -print 2> /dev/null | sed 1d | cut -b3-"}"
+  eval "$cmd" | fzf -m | while read item; do
     printf '%q ' "$item"
   done
   echo
@@ -24,12 +25,12 @@ __fzf_select_tmux__() {
   else
     height="-l $height"
   fi
-  tmux split-window $height "cd $(printf %q "$PWD");bash -c 'source ~/.fzf.bash; tmux send-keys -t $TMUX_PANE \"\$(__fzf_select__)\"'"
+  tmux split-window $height "cd $(printf %q "$PWD"); FZF_CTRL_T_COMMAND=$(printf %q "$FZF_CTRL_T_COMMAND") bash -c 'source ~/.fzf.bash; tmux send-keys -t $TMUX_PANE \"\$(__fzf_select__)\"'"
 }
 
 __fzf_cd__() {
   local dir
-  dir=$(command find -L ${1:-.} \( -path '*/\.*' -o -fstype 'dev' -o -fstype 'proc' \) -prune \
+  dir=$(command \find -L ${1:-.} \( -path '*/\.*' -o -fstype 'dev' -o -fstype 'proc' \) -prune \
     -o -type d -print 2> /dev/null | sed 1d | cut -b3- | $(__fzfcmd) +m) && printf 'cd %q' "$dir"
 }
 
