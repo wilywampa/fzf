@@ -648,6 +648,101 @@ class TestGoFZF < TestBase
     tmux.until { |lines| lines[-10].start_with? '>' }
   end
 
+  def test_header_lines
+    tmux.send_keys "seq 100 | #{fzf '--header-lines=10 -q 5'}", :Enter
+    2.times do
+      tmux.until do |lines|
+        lines[-2].include?('/90') &&
+        lines[-3]  == '  1' &&
+        lines[-4]  == '  2' &&
+        lines[-13] == '> 15'
+      end
+      tmux.send_keys :Down
+    end
+    tmux.send_keys :Enter
+    assert_equal '15', readonce.chomp
+  end
+
+  def test_header_lines_reverse
+    tmux.send_keys "seq 100 | #{fzf '--header-lines=10 -q 5 --reverse'}", :Enter
+    2.times do
+      tmux.until do |lines|
+        lines[1].include?('/90') &&
+        lines[2]  == '  1' &&
+        lines[3]  == '  2' &&
+        lines[12] == '> 15'
+      end
+      tmux.send_keys :Up
+    end
+    tmux.send_keys :Enter
+    assert_equal '15', readonce.chomp
+  end
+
+  def test_header_lines_overflow
+    tmux.send_keys "seq 100 | #{fzf '--header-lines=200'}", :Enter
+    tmux.until do |lines|
+      lines[-2].include?('0/0') &&
+      lines[-3].include?('  1')
+    end
+    tmux.send_keys :Enter
+    assert_equal '', readonce.chomp
+  end
+
+  def test_header_lines_with_nth
+    tmux.send_keys "seq 100 | #{fzf "--header-lines 5 --with-nth 1,1,1,1,1"}", :Enter
+    tmux.until do |lines|
+      lines[-2].include?('95/95') &&
+      lines[-3] == '  11111' &&
+      lines[-7] == '  55555' &&
+      lines[-8] == '> 66666'
+    end
+    tmux.send_keys :Enter
+    assert_equal '6', readonce.chomp
+  end
+
+  def test_header_file
+    tmux.send_keys "seq 100 | #{fzf "--header-file <(head -5 #{__FILE__})"}", :Enter
+    header = File.readlines(__FILE__).take(5).map(&:strip)
+    tmux.until do |lines|
+      lines[-2].include?('100/100') &&
+      lines[-7..-3].map(&:strip) == header
+    end
+  end
+
+  def test_header_file_reverse
+    tmux.send_keys "seq 100 | #{fzf "--header-file=<(head -5 #{__FILE__}) --reverse"}", :Enter
+    header = File.readlines(__FILE__).take(5).map(&:strip)
+    tmux.until do |lines|
+      lines[1].include?('100/100') &&
+      lines[2..6].map(&:strip) == header
+    end
+  end
+
+  def test_canel
+    tmux.send_keys "seq 10 | #{fzf "--bind 2:cancel"}", :Enter
+    tmux.until { |lines| lines[-2].include?('10/10') }
+    tmux.send_keys '123'
+    tmux.until { |lines| lines[-1] == '> 3' && lines[-2].include?('1/10') }
+    tmux.send_keys 'C-y', 'C-y'
+    tmux.until { |lines| lines[-1] == '> 311' }
+    tmux.send_keys 2
+    tmux.until { |lines| lines[-1] == '>' }
+    tmux.send_keys 2
+    tmux.prepare
+  end
+
+  def test_margin
+    tmux.send_keys "yes | head -1000 | #{fzf "--margin 5,3"}", :Enter
+    tmux.until { |lines| lines[4] == '' && lines[5] == '     y' }
+    tmux.send_keys :Enter
+  end
+
+  def test_margin_reverse
+    tmux.send_keys "seq 1000 | #{fzf "--margin 7,5 --reverse"}", :Enter
+    tmux.until { |lines| lines[1 + 7] == '       1000/1000' }
+    tmux.send_keys :Enter
+  end
+
 private
   def writelines path, lines
     File.unlink path while File.exists? path

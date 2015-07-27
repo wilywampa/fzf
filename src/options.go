@@ -2,6 +2,7 @@ package fzf
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"regexp"
 	"strconv"
@@ -23,36 +24,39 @@ const usage = `usage: fzf [options]
     -n, --nth=N[,..]      Comma-separated list of field index expressions
                           for limiting search scope. Each can be a non-zero
                           integer or a range expression ([BEGIN]..[END])
-        --with-nth=N[,..] Transform item using index expressions within finder
+    --with-nth=N[,..]     Transform item using index expressions within finder
     -d, --delimiter=STR   Field delimiter regex for --nth (default: AWK-style)
     +s, --no-sort         Do not sort the result
-        --tac             Reverse the order of the input
-        --tiebreak=CRI    Sort criterion when the scores are tied;
+    --tac                 Reverse the order of the input
+    --tiebreak=CRITERION  Sort criterion when the scores are tied;
                           [length|begin|end|index] (default: length)
 
   Interface
     -m, --multi           Enable multi-select with tab/shift-tab
-        --ansi            Enable processing of ANSI color codes
-        --no-mouse        Disable mouse
-        --color=COLSPEC   Base scheme (dark|light|16|bw) and/or custom colors
-        --black           Use black background
-        --reverse         Reverse orientation
-        --cycle           Enable cyclic scroll
-        --no-hscroll      Disable horizontal scroll
-        --inline-info     Display finder info inline with the query
-        --prompt=STR      Input prompt (default: '> ')
-        --bind=KEYBINDS   Custom key bindings. Refer to the man page.
-        --history=FILE    History file
-        --history-size=N  Maximum number of history entries (default: 1000)
+    --ansi                Enable processing of ANSI color codes
+    --no-mouse            Disable mouse
+    --color=COLSPEC       Base scheme (dark|light|16|bw) and/or custom colors
+    --black               Use black background
+    --reverse             Reverse orientation
+    --margin=MARGIN       Screen margin (TRBL / TB,RL / T,RL,B / T,R,B,L)
+    --cycle               Enable cyclic scroll
+    --no-hscroll          Disable horizontal scroll
+    --inline-info         Display finder info inline with the query
+    --prompt=STR          Input prompt (default: '> ')
+    --bind=KEYBINDS       Custom key bindings. Refer to the man page.
+    --history=FILE        History file
+    --history-size=N      Maximum number of history entries (default: 1000)
+    --header-file=FILE    The file whose content to be printed as header
+    --header-lines=N      The first N lines of the input are treated as header
 
   Scripting
     -q, --query=STR       Start the finder with the given query
     -1, --select-1        Automatically select the only match
     -0, --exit-0          Exit immediately when there's no match
     -f, --filter=STR      Filter mode. Do not start interactive finder.
-        --print-query     Print query as the first line
-        --expect=KEYS     Comma-separated list of keys to complete fzf
-        --sync            Synchronous search for multi-staged filtering
+    --print-query         Print query as the first line
+    --expect=KEYS         Comma-separated list of keys to complete fzf
+    --sync                Synchronous search for multi-staged filtering
 
   Environment variables
     FZF_DEFAULT_COMMAND   Default command to use when input is tty
@@ -90,39 +94,46 @@ const (
 	byIndex
 )
 
+func defaultMargin() [4]string {
+	return [4]string{"0", "0", "0", "0"}
+}
+
 // Options stores the values of command-line options
 type Options struct {
-	Mode       Mode
-	Case       Case
-	Nth        []Range
-	WithNth    []Range
-	Delimiter  *regexp.Regexp
-	Sort       int
-	Tac        bool
-	Tiebreak   tiebreak
-	Multi      bool
-	Ansi       bool
-	Mouse      bool
-	Theme      *curses.ColorTheme
-	Black      bool
-	Reverse    bool
-	Cycle      bool
-	Hscroll    bool
-	InlineInfo bool
-	Prompt     string
-	Query      string
-	Select1    bool
-	Exit0      bool
-	Filter     *string
-	ToggleSort bool
-	Expect     map[int]string
-	Keymap     map[int]actionType
-	Execmap    map[int]string
-	PrintQuery bool
-	ReadZero   bool
-	Sync       bool
-	History    *History
-	Version    bool
+	Mode        Mode
+	Case        Case
+	Nth         []Range
+	WithNth     []Range
+	Delimiter   *regexp.Regexp
+	Sort        int
+	Tac         bool
+	Tiebreak    tiebreak
+	Multi       bool
+	Ansi        bool
+	Mouse       bool
+	Theme       *curses.ColorTheme
+	Black       bool
+	Reverse     bool
+	Cycle       bool
+	Hscroll     bool
+	InlineInfo  bool
+	Prompt      string
+	Query       string
+	Select1     bool
+	Exit0       bool
+	Filter      *string
+	ToggleSort  bool
+	Expect      map[int]string
+	Keymap      map[int]actionType
+	Execmap     map[int]string
+	PrintQuery  bool
+	ReadZero    bool
+	Sync        bool
+	History     *History
+	Header      []string
+	HeaderLines int
+	Margin      [4]string
+	Version     bool
 }
 
 func defaultTheme() *curses.ColorTheme {
@@ -134,37 +145,40 @@ func defaultTheme() *curses.ColorTheme {
 
 func defaultOptions() *Options {
 	return &Options{
-		Mode:       ModeFuzzy,
-		Case:       CaseSmart,
-		Nth:        make([]Range, 0),
-		WithNth:    make([]Range, 0),
-		Delimiter:  nil,
-		Sort:       1000,
-		Tac:        false,
-		Tiebreak:   byLength,
-		Multi:      false,
-		Ansi:       false,
-		Mouse:      true,
-		Theme:      defaultTheme(),
-		Black:      false,
-		Reverse:    false,
-		Cycle:      false,
-		Hscroll:    true,
-		InlineInfo: false,
-		Prompt:     "> ",
-		Query:      "",
-		Select1:    false,
-		Exit0:      false,
-		Filter:     nil,
-		ToggleSort: false,
-		Expect:     make(map[int]string),
-		Keymap:     defaultKeymap(),
-		Execmap:    make(map[int]string),
-		PrintQuery: false,
-		ReadZero:   false,
-		Sync:       false,
-		History:    nil,
-		Version:    false}
+		Mode:        ModeFuzzy,
+		Case:        CaseSmart,
+		Nth:         make([]Range, 0),
+		WithNth:     make([]Range, 0),
+		Delimiter:   nil,
+		Sort:        1000,
+		Tac:         false,
+		Tiebreak:    byLength,
+		Multi:       false,
+		Ansi:        false,
+		Mouse:       true,
+		Theme:       defaultTheme(),
+		Black:       false,
+		Reverse:     false,
+		Cycle:       false,
+		Hscroll:     true,
+		InlineInfo:  false,
+		Prompt:      "> ",
+		Query:       "",
+		Select1:     false,
+		Exit0:       false,
+		Filter:      nil,
+		ToggleSort:  false,
+		Expect:      make(map[int]string),
+		Keymap:      defaultKeymap(),
+		Execmap:     make(map[int]string),
+		PrintQuery:  false,
+		ReadZero:    false,
+		Sync:        false,
+		History:     nil,
+		Header:      make([]string, 0),
+		HeaderLines: 0,
+		Margin:      defaultMargin(),
+		Version:     false}
 }
 
 func help(ok int) {
@@ -174,7 +188,7 @@ func help(ok int) {
 
 func errorExit(msg string) {
 	os.Stderr.WriteString(msg + "\n")
-	help(1)
+	os.Exit(1)
 }
 
 func optString(arg string, prefixes ...string) (bool, string) {
@@ -207,6 +221,14 @@ func atoi(str string) int {
 	num, err := strconv.Atoi(str)
 	if err != nil {
 		errorExit("not a valid integer: " + str)
+	}
+	return num
+}
+
+func atof(str string) float64 {
+	num, err := strconv.ParseFloat(str, 64)
+	if err != nil {
+		errorExit("not a valid number: " + str)
 	}
 	return num
 }
@@ -413,6 +435,8 @@ func parseTheme(defaultTheme *curses.ColorTheme, str string) *curses.ColorTheme 
 				theme.Cursor = ansi
 			case "marker":
 				theme.Selected = ansi
+			case "header":
+				theme.Header = ansi
 			default:
 				fail()
 			}
@@ -488,8 +512,12 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, toggleSort b
 			keymap[key] = actClearScreen
 		case "delete-char":
 			keymap[key] = actDeleteChar
+		case "delete-char/eof":
+			keymap[key] = actDeleteCharEof
 		case "end-of-line":
 			keymap[key] = actEndOfLine
+		case "cancel":
+			keymap[key] = actCancel
 		case "forward-char":
 			keymap[key] = actForwardChar
 		case "forward-word":
@@ -569,6 +597,56 @@ func checkToggleSort(keymap map[int]actionType, str string) map[int]actionType {
 	}
 	keymap[firstKey(keys)] = actToggleSort
 	return keymap
+}
+
+func readHeaderFile(filename string) []string {
+	content, err := ioutil.ReadFile(filename)
+	if err != nil {
+		errorExit("failed to read header file: " + filename)
+	}
+	return strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+}
+
+func parseMargin(margin string) [4]string {
+	margins := strings.Split(margin, ",")
+	checked := func(str string) string {
+		if strings.HasSuffix(str, "%") {
+			val := atof(str[:len(str)-1])
+			if val < 0 {
+				errorExit("margin must be non-negative")
+			}
+			if val > 100 {
+				errorExit("margin too large")
+			}
+		} else {
+			val := atoi(str)
+			if val < 0 {
+				errorExit("margin must be non-negative")
+			}
+		}
+		return str
+	}
+	switch len(margins) {
+	case 1:
+		m := checked(margins[0])
+		return [4]string{m, m, m, m}
+	case 2:
+		tb := checked(margins[0])
+		rl := checked(margins[1])
+		return [4]string{tb, rl, tb, rl}
+	case 3:
+		t := checked(margins[0])
+		rl := checked(margins[1])
+		b := checked(margins[2])
+		return [4]string{t, rl, b, rl}
+	case 4:
+		return [4]string{
+			checked(margins[0]), checked(margins[1]),
+			checked(margins[2]), checked(margins[3])}
+	default:
+		errorExit("invalid margin: " + margin)
+	}
+	return defaultMargin()
 }
 
 func parseOptions(opts *Options, allArgs []string) {
@@ -710,6 +788,23 @@ func parseOptions(opts *Options, allArgs []string) {
 			setHistory(nextString(allArgs, &i, "history file path required"))
 		case "--history-size":
 			setHistoryMax(nextInt(allArgs, &i, "history max size required"))
+		case "--no-header-file":
+			opts.Header = []string{}
+		case "--no-header-lines":
+			opts.HeaderLines = 0
+		case "--header-file":
+			opts.Header = readHeaderFile(
+				nextString(allArgs, &i, "header file name required"))
+			opts.HeaderLines = 0
+		case "--header-lines":
+			opts.Header = []string{}
+			opts.HeaderLines = atoi(
+				nextString(allArgs, &i, "number of header lines required"))
+		case "--no-margin":
+			opts.Margin = defaultMargin()
+		case "--margin":
+			opts.Margin = parseMargin(
+				nextString(allArgs, &i, "margin required (TRBL / TB,RL / T,RL,B / T,R,B,L)"))
 		case "--version":
 			opts.Version = true
 		default:
@@ -743,10 +838,22 @@ func parseOptions(opts *Options, allArgs []string) {
 				setHistory(value)
 			} else if match, value := optString(arg, "--history-size="); match {
 				setHistoryMax(atoi(value))
+			} else if match, value := optString(arg, "--header-file="); match {
+				opts.Header = readHeaderFile(value)
+				opts.HeaderLines = 0
+			} else if match, value := optString(arg, "--header-lines="); match {
+				opts.Header = []string{}
+				opts.HeaderLines = atoi(value)
+			} else if match, value := optString(arg, "--margin="); match {
+				opts.Margin = parseMargin(value)
 			} else {
 				errorExit("unknown option: " + arg)
 			}
 		}
+	}
+
+	if opts.HeaderLines < 0 {
+		errorExit("header lines must be a non-negative integer")
 	}
 
 	// Change default actions for CTRL-N / CTRL-P when --history is used

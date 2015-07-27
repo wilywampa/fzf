@@ -8,7 +8,7 @@ import (
 
 const (
 	// Current version
-	Version = "0.10.0"
+	Version = "0.10.1"
 
 	// Core
 	coordinatorDelayMax  time.Duration = 100 * time.Millisecond
@@ -44,5 +44,6 @@ const (
 	EvtSearchNew
 	EvtSearchProgress
 	EvtSearchFin
+	EvtHeader
 	EvtClose
 )

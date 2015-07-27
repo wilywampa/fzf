@@ -1,6 +1,25 @@
 CHANGELOG
 =========
 
+0.10.1
+------
+
+### New features
+
+- Added `--margin` option
+- Added options for sticky header
+    - `--header-file`
+    - `--header-lines`
+- Added `cancel` action which clears the input or closes the finder when the
+  input is already empty
+    - e.g. `export FZF_DEFAULT_OPTS="--bind esc:cancel"`
+- Added `delete-char/eof` action to differentiate `CTRL-D` and `DEL`
+
+### Minor improvements/fixes
+
+- Fixed to allow binding colon and comma keys
+- Fixed ANSI processor to handle color regions spanning multiple lines
+
 0.10.0
 ------
 

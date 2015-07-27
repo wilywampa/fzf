@@ -21,7 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ..
-.TH fzf 1 "June 2015" "fzf 0.10.0" "fzf - a command-line fuzzy finder"
+.TH fzf 1 "July 2015" "fzf 0.10.1" "fzf - a command-line fuzzy finder"
 
 .SH NAME
 fzf - a command-line fuzzy finder
@@ -122,6 +122,7 @@ e.g. \fBfzf --color=bg+:24\fR
     \fBpointer \fRPointer to the current line
     \fBmarker  \fRMulti-select marker
     \fBspinner \fRStreaming input indicator
+    \fBheader  \fRHeader
 .RE
 .TP
 .B "--black"
@@ -129,6 +130,31 @@ Use black background
 .TP
 .B "--reverse"
 Reverse orientation
+.TP
+.BI "--margin=" MARGIN
+Comma-separated expression for margins around the finder.
+.br
+.R ""
+.br
+.RS
+.BR TRBL "     Same margin for top, right, bottom, and left"
+.br
+.BR TB,RL "    Vertical, horizontal margin"
+.br
+.BR T,RL,B "   Top, horizontal, bottom margin"
+.br
+.BR T,R,B,L "  Top, right, bottom, left margin"
+.br
+.R ""
+.br
+Each part can be given in absolute number or in percentage relative to the
+terminal size with \fB%\fR suffix.
+.br
+.R ""
+.br
+e.g. \fBfzf --margin 10%\fR
+     \fBfzf --margin 1,5%\fR
+.RE
 .TP
 .B "--cycle"
 Enable cyclic scroll
@@ -187,8 +213,10 @@ e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
     \fBbackward-kill-word\fR    \fIalt-bs\fR
     \fBbackward-word\fR         \fIalt-b   shift-left\fR
     \fBbeginning-of-line\fR     \fIctrl-a  home\fR
+    \fBcancel\fR
     \fBclear-screen\fR          \fIctrl-l\fR
-    \fBdelete-char\fR           \fIctrl-d  del\fR
+    \fBdelete-char\fR           \fIdel\fR
+    \fBdelete-char/eof\fR       \fIctrl-d\fR
     \fBdeselect-all\fR
     \fBdown\fR                  \fIctrl-j  ctrl-n  down\fR
     \fBend-of-line\fR           \fIctrl-e  end\fR
@@ -256,6 +284,17 @@ When enabled, \fBCTRL-N\fR and \fBCTRL-P\fR are automatically remapped to
 .BI "--history-size=" "N"
 Maximum number of entries in the history file (default: 1000). The file is
 automatically truncated when the number of the lines exceeds the value.
+.TP
+.BI "--header-file=" "FILE"
+The content of the file will be printed as the sticky header. The lines in the
+file are displayed in order from top to bottom regardless of \fB--reverse\fR,
+and are not affected by \fB--with-nth\fR. ANSI color codes are processed even
+when \fB--ansi\fR is not set.
+.TP
+.BI "--header-lines=" "N"
+The first N lines of the input are treated as the sticky header. When
+\fB--with-nth\fR is set, the lines are transformed just like the other
+lines that follow.
 .SS Scripting
 .TP
 .BI "-q, --query=" "STR"

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +41,9 @@ type Terminal struct {
 	printQuery bool
 	history    *History
 	cycle      bool
+	header     []string
+	margin     [4]string
+	marginInt  [4]int
 	count      int
 	progress   int
 	reading    bool
@@ -78,6 +82,7 @@ var _runeWidths = make(map[rune]int)
 const (
 	reqPrompt util.EventType = iota
 	reqInfo
+	reqHeader
 	reqList
 	reqRefresh
 	reqRedraw
@@ -98,8 +103,10 @@ const (
 	actBackwardChar
 	actBackwardDeleteChar
 	actBackwardWord
+	actCancel
 	actClearScreen
 	actDeleteChar
+	actDeleteCharEof
 	actEndOfLine
 	actForwardChar
 	actForwardWord
@@ -134,7 +141,7 @@ func defaultKeymap() map[int]actionType {
 	keymap[C.CtrlG] = actAbort
 	keymap[C.CtrlQ] = actAbort
 	keymap[C.ESC] = actAbort
-	keymap[C.CtrlD] = actDeleteChar
+	keymap[C.CtrlD] = actDeleteCharEof
 	keymap[C.CtrlE] = actEndOfLine
 	keymap[C.CtrlF] = actForwardChar
 	keymap[C.CtrlH] = actBackwardDeleteChar
@@ -165,7 +172,7 @@ func defaultKeymap() map[int]actionType {
 
 	keymap[C.Home] = actBeginningOfLine
 	keymap[C.End] = actEndOfLine
-	keymap[C.Del] = actDeleteChar // FIXME Del vs. CTRL-D
+	keymap[C.Del] = actDeleteChar
 	keymap[C.PgUp] = actPageUp
 	keymap[C.PgDn] = actPageDown
 
@@ -196,7 +203,10 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		pressed:    "",
 		printQuery: opts.PrintQuery,
 		history:    opts.History,
+		margin:     opts.Margin,
+		marginInt:  [4]int{0, 0, 0, 0},
 		cycle:      opts.Cycle,
+		header:     opts.Header,
 		reading:    true,
 		merger:     EmptyMerger,
 		selected:   make(map[uint32]selectedItem),
@@ -227,6 +237,22 @@ func (t *Terminal) UpdateCount(cnt int, final bool) {
 	if final {
 		t.reqBox.Set(reqRefresh, nil)
 	}
+}
+
+// UpdateHeader updates the header
+func (t *Terminal) UpdateHeader(header []string, lines int) {
+	t.mutex.Lock()
+	t.header = make([]string, lines)
+	copy(t.header, header)
+	if !t.reverse {
+		reversed := make([]string, lines)
+		for idx, str := range t.header {
+			reversed[lines-idx-1] = str
+		}
+		t.header = reversed
+	}
+	t.mutex.Unlock()
+	t.reqBox.Set(reqHeader, nil)
 }
 
 // UpdateProgress updates the search progress
@@ -296,10 +322,50 @@ func displayWidth(runes []rune) int {
 	return l
 }
 
+const minWidth = 16
+const minHeight = 4
+
+func (t *Terminal) calculateMargins() {
+	screenWidth := C.MaxX()
+	screenHeight := C.MaxY()
+	for idx, str := range t.margin {
+		if str == "0" {
+			t.marginInt[idx] = 0
+		} else if strings.HasSuffix(str, "%") {
+			num, _ := strconv.ParseFloat(str[:len(str)-1], 64)
+			var val float64
+			if idx%2 == 0 {
+				val = float64(screenHeight)
+			} else {
+				val = float64(screenWidth)
+			}
+			t.marginInt[idx] = int(val * num * 0.01)
+		} else {
+			num, _ := strconv.Atoi(str)
+			t.marginInt[idx] = num
+		}
+	}
+	adjust := func(idx1 int, idx2 int, max int, min int) {
+		if max >= min {
+			margin := t.marginInt[idx1] + t.marginInt[idx2]
+			if max-margin < min {
+				desired := max - min
+				t.marginInt[idx1] = desired * t.marginInt[idx1] / margin
+				t.marginInt[idx2] = desired * t.marginInt[idx2] / margin
+			}
+		}
+	}
+	adjust(1, 3, screenWidth, minWidth)
+	adjust(0, 2, screenHeight, minHeight)
+}
+
 func (t *Terminal) move(y int, x int, clear bool) {
+	x += t.marginInt[3]
 	maxy := C.MaxY()
 	if !t.reverse {
-		y = maxy - y - 1
+		y = maxy - y - 1 - t.marginInt[2]
+	} else {
+		y += t.marginInt[0]
 	}
 
 	if clear {
@@ -354,17 +420,49 @@ func (t *Terminal) printInfo() {
 	C.CPrint(C.ColInfo, false, output)
 }
 
+func (t *Terminal) maxHeight() int {
+	return C.MaxY() - t.marginInt[0] - t.marginInt[2]
+}
+
+func (t *Terminal) printHeader() {
+	if len(t.header) == 0 {
+		return
+	}
+	max := t.maxHeight()
+	var state *ansiState
+	for idx, lineStr := range t.header {
+		if !t.reverse {
+			idx = len(t.header) - idx - 1
+		}
+		line := idx + 2
+		if t.inlineInfo {
+			line -= 1
+		}
+		if line >= max {
+			continue
+		}
+		trimmed, colors, newState := extractColor(&lineStr, state)
+		state = newState
+		item := &Item{
+			text:   trimmed,
+			index:  0,
+			colors: colors,
+			rank:   Rank{0, 0, 0}}
+
+		t.move(line, 2, true)
+		t.printHighlighted(item, false, C.ColHeader, 0, false)
+	}
+}
+
 func (t *Terminal) printList() {
 	t.constrain()
 
 	maxy := t.maxItems()
 	count := t.merger.Length() - t.offset
 	for i := 0; i < maxy; i++ {
-		var line int
+		line := i + 2 + len(t.header)
 		if t.inlineInfo {
-			line = i + 1
-		} else {
-			line = i + 2
+			line -= 1
 		}
 		t.move(line, 0, true)
 		if i < count {
@@ -441,7 +539,7 @@ func (t *Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, c
 	// Overflow
 	text := []rune(*item.text)
 	offsets := item.colorOffsets(col2, bold, current)
-	maxWidth := C.MaxX() - 3
+	maxWidth := C.MaxX() - 3 - t.marginInt[1] - t.marginInt[3]
 	fullWidth := displayWidth(text)
 	if fullWidth > maxWidth {
 		if t.hscroll {
@@ -524,9 +622,11 @@ func processTabs(runes []rune, prefixWidth int) (string, int) {
 }
 
 func (t *Terminal) printAll() {
+	t.calculateMargins()
 	t.printList()
 	t.printPrompt()
 	t.printInfo()
+	t.printHeader()
 }
 
 func (t *Terminal) refresh() {
@@ -602,10 +702,12 @@ func (t *Terminal) Loop() {
 	{ // Late initialization
 		t.mutex.Lock()
 		t.initFunc()
+		t.calculateMargins()
 		t.printPrompt()
 		t.placeCursor()
 		C.Refresh()
 		t.printInfo()
+		t.printHeader()
 		t.mutex.Unlock()
 		go func() {
 			timer := time.NewTimer(initialDelay)
@@ -660,6 +762,8 @@ func (t *Terminal) Loop() {
 						t.printInfo()
 					case reqList:
 						t.printList()
+					case reqHeader:
+						t.printHeader()
 					case reqRefresh:
 						t.suppress = false
 					case reqRedraw:
@@ -757,11 +861,21 @@ func (t *Terminal) Loop() {
 		case actAbort:
 			req(reqQuit)
 		case actDeleteChar:
+			t.delChar()
+		case actDeleteCharEof:
 			if !t.delChar() && t.cx == 0 {
 				req(reqQuit)
 			}
 		case actEndOfLine:
 			t.cx = len(t.input)
+		case actCancel:
+			if len(t.input) == 0 {
+				req(reqQuit)
+			} else {
+				t.yanked = t.input
+				t.input = []rune{}
+				t.cx = 0
+			}
 		case actForwardChar:
 			if t.cx < len(t.input) {
 				t.cx++
@@ -879,14 +993,7 @@ func (t *Terminal) Loop() {
 			}
 		case actMouse:
 			me := event.MouseEvent
-			mx, my := util.Constrain(me.X-len(t.prompt), 0, len(t.input)), me.Y
-			if !t.reverse {
-				my = C.MaxY() - my - 1
-			}
-			min := 2
-			if t.inlineInfo {
-				min = 1
-			}
+			mx, my := me.X, me.Y
 			if me.S != 0 {
 				// Scroll
 				if t.merger.Length() > 0 {
@@ -896,23 +1003,36 @@ func (t *Terminal) Loop() {
 					t.vmove(me.S)
 					req(reqList)
 				}
-			} else if me.Double {
-				// Double-click
-				if my >= min {
-					if t.vset(t.offset+my-min) && t.cy < t.merger.Length() {
-						req(reqClose)
-					}
+			} else if mx >= t.marginInt[3] && mx < C.MaxX()-t.marginInt[1] &&
+				my >= t.marginInt[0] && my < C.MaxY()-t.marginInt[2] {
+				mx -= t.marginInt[3]
+				my -= t.marginInt[0]
+				mx = util.Constrain(mx-len(t.prompt), 0, len(t.input))
+				if !t.reverse {
+					my = t.maxHeight() - my - 1
 				}
-			} else if me.Down {
-				if my == 0 && mx >= 0 {
-					// Prompt
-					t.cx = mx
-				} else if my >= min {
-					// List
-					if t.vset(t.offset+my-min) && t.multi && me.Mod {
-						toggle()
+				min := 2 + len(t.header)
+				if t.inlineInfo {
+					min -= 1
+				}
+				if me.Double {
+					// Double-click
+					if my >= min {
+						if t.vset(t.offset+my-min) && t.cy < t.merger.Length() {
+							req(reqClose)
+						}
 					}
-					req(reqList)
+				} else if me.Down {
+					if my == 0 && mx >= 0 {
+						// Prompt
+						t.cx = mx
+					} else if my >= min {
+						// List
+						if t.vset(t.offset+my-min) && t.multi && me.Mod {
+							toggle()
+						}
+						req(reqList)
+					}
 				}
 			}
 		}
@@ -948,6 +1068,7 @@ func (t *Terminal) constrain() {
 		t.offset = util.Max(0, count-height)
 		t.cy = util.Constrain(t.offset+diffpos, 0, count-1)
 	}
+	t.offset = util.Max(0, t.offset)
 }
 
 func (t *Terminal) vmove(o int) {
@@ -976,8 +1097,9 @@ func (t *Terminal) vset(o int) bool {
 }
 
 func (t *Terminal) maxItems() int {
+	max := t.maxHeight() - 2 - len(t.header)
 	if t.inlineInfo {
-		return C.MaxY() - 1
+		max += 1
 	}
-	return C.MaxY() - 2
+	return util.Max(max, 0)
 }
