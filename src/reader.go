@@ -11,7 +11,7 @@ import (
 
 // Reader reads from command or standard input
 type Reader struct {
-	pusher   func(string) bool
+	pusher   func([]byte) bool
 	eventBox *util.EventBox
 	delimNil bool
 }
@@ -37,13 +37,14 @@ func (r *Reader) feed(src io.Reader) {
 	}
 	reader := bufio.NewReader(src)
 	for {
-		line, err := reader.ReadString(delim)
-		if line != "" {
-			// "ReadString returns err != nil if and only if the returned data does not end in delim."
+		// ReadBytes returns err != nil if and only if the returned data does not
+		// end in delim.
+		bytea, err := reader.ReadBytes(delim)
+		if len(bytea) > 0 {
 			if err == nil {
-				line = line[:len(line)-1]
+				bytea = bytea[:len(bytea)-1]
 			}
-			if r.pusher(line) {
+			if r.pusher(bytea) {
 				r.eventBox.Set(EvtReadNew, nil)
 			}
 		}

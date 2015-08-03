@@ -6,6 +6,7 @@ import "C"
 import (
 	"os"
 	"time"
+	"unicode/utf8"
 )
 
 // Max returns the largest integer
@@ -19,7 +20,7 @@ func Max(first int, items ...int) int {
 	return max
 }
 
-// Max32 returns the smallest 32-bit integer
+// Min32 returns the smallest 32-bit integer
 func Min32(first int32, second int32) int32 {
 	if first <= second {
 		return first
@@ -69,22 +70,33 @@ func DurWithin(
 	return val
 }
 
-func Between(val int, min int, max int) bool {
-	return val >= min && val <= max
-}
-
 // IsTty returns true is stdin is a terminal
 func IsTty() bool {
 	return int(C.isatty(C.int(os.Stdin.Fd()))) != 0
 }
 
-func TrimRight(runes *[]rune) []rune {
+func TrimRight(runes []rune) []rune {
 	var i int
-	for i = len(*runes) - 1; i >= 0; i-- {
-		char := (*runes)[i]
+	for i = len(runes) - 1; i >= 0; i-- {
+		char := runes[i]
 		if char != ' ' && char != '\t' {
 			break
 		}
 	}
-	return (*runes)[0 : i+1]
+	return runes[0 : i+1]
+}
+
+func BytesToRunes(bytea []byte) []rune {
+	runes := make([]rune, 0, len(bytea))
+	for i := 0; i < len(bytea); {
+		if bytea[i] < utf8.RuneSelf {
+			runes = append(runes, rune(bytea[i]))
+			i++
+		} else {
+			r, sz := utf8.DecodeRune(bytea[i:])
+			i += sz
+			runes = append(runes, r)
+		}
+	}
+	return runes
 }

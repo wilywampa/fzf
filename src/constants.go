@@ -8,14 +8,14 @@ import (
 
 const (
 	// Current version
-	Version = "0.10.1"
+	version = "0.10.2"
 
 	// Core
 	coordinatorDelayMax  time.Duration = 100 * time.Millisecond
 	coordinatorDelayStep time.Duration = 10 * time.Millisecond
 
 	// Reader
-	defaultCommand = `find * -path '*/\.*' -prune -o -type f -print -o -type l -print 2> /dev/null`
+	defaultCommand = `find . -path '*/\.*' -prune -o -type f -print -o -type l -print 2> /dev/null | sed s/^..//`
 
 	// Terminal
 	initialDelay    = 100 * time.Millisecond

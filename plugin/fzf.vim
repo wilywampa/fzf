@@ -54,13 +54,17 @@ function! s:fzf_exec()
   return s:exec
 endfunction
 
+function! s:tmux_not_zoomed()
+  return system('tmux list-panes -F "#F"') !~# 'Z'
+endfunction
+
 function! s:tmux_enabled()
   if has('gui_running')
     return 0
   endif
 
   if exists('s:tmux')
-    return s:tmux
+    return s:tmux && s:tmux_not_zoomed()
   endif
 
   let s:tmux = 0
@@ -68,7 +72,7 @@ function! s:tmux_enabled()
     let output = system('tmux -V')
     let s:tmux = !v:shell_error && output >= 'tmux 1.7'
   endif
-  return s:tmux
+  return s:tmux && s:tmux_not_zoomed()
 endfunction
 
 function! s:shellesc(arg)
@@ -364,9 +368,15 @@ function! s:cmd_callback(lines) abort
   endif
   let key = remove(a:lines, 0)
   let cmd = get(s:action, key, 'e')
-  for item in a:lines
-    execute cmd s:escape(item)
-  endfor
+  try
+    let autochdir = &autochdir
+    set noautochdir
+    for item in a:lines
+      execute cmd s:escape(item)
+    endfor
+  finally
+    let &autochdir = autochdir
+  endtry
 endfunction
 
 function! s:cmd(bang, ...) abort

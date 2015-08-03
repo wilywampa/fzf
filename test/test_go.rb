@@ -501,6 +501,32 @@ class TestGoFZF < TestBase
     assert_equal input, `cat #{tempname} | #{FZF} -f"!z" -x --tiebreak end`.split($/)
   end
 
+  def test_tiebreak_length_with_nth
+    input = %w[
+      1:hell
+      123:hello
+      12345:he
+      1234567:h
+    ]
+    writelines tempname, input
+
+    output = %w[
+      1:hell
+      12345:he
+      123:hello
+      1234567:h
+    ]
+    assert_equal output, `cat #{tempname} | #{FZF} -fh`.split($/)
+
+    output = %w[
+      1234567:h
+      12345:he
+      1:hell
+      123:hello
+    ]
+    assert_equal output, `cat #{tempname} | #{FZF} -fh -n2 -d:`.split($/)
+  end
+
   def test_invalid_cache
     tmux.send_keys "(echo d; echo D; echo x) | #{fzf '-q d'}", :Enter
     tmux.until { |lines| lines[-2].include? '2/3' }
@@ -741,6 +767,11 @@ class TestGoFZF < TestBase
     tmux.send_keys "seq 1000 | #{fzf "--margin 7,5 --reverse"}", :Enter
     tmux.until { |lines| lines[1 + 7] == '       1000/1000' }
     tmux.send_keys :Enter
+  end
+
+  def test_invalid_term
+    tmux.send_keys "TERM=xxx fzf", :Enter
+    tmux.until { |lines| lines.any? { |l| l.include? 'Invalid $TERM: xxx' } }
   end
 
 private
