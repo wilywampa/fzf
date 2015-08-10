@@ -96,6 +96,7 @@ if [ -n "$binary_error" ]; then
     echo "No prebuilt binary for $archi ... "
   else
     echo "  - $binary_error !!!"
+    exit 1
   fi
   echo "Installing legacy Ruby version ..."
 
@@ -250,6 +251,7 @@ append_line() {
   if [ -n "$line" ]; then
     echo "    - Already exists: line #$line"
   else
+    echo >> "$2"
     echo "$1" >> "$2"
     echo "    + Added"
   fi
