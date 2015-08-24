@@ -8,11 +8,59 @@ import (
 )
 
 func TestDelimiterRegex(t *testing.T) {
-	rx := delimiterRegexp("*")
-	tokens := rx.FindAllString("-*--*---**---", -1)
-	if tokens[0] != "-*" || tokens[1] != "--*" || tokens[2] != "---*" ||
-		tokens[3] != "*" || tokens[4] != "---" {
-		t.Errorf("%s %s %d", rx, tokens, len(tokens))
+	// Valid regex
+	delim := delimiterRegexp(".")
+	if delim.regex == nil || delim.str != nil {
+		t.Error(delim)
+	}
+	// Broken regex -> string
+	delim = delimiterRegexp("[0-9")
+	if delim.regex != nil || *delim.str != "[0-9" {
+		t.Error(delim)
+	}
+	// Valid regex
+	delim = delimiterRegexp("[0-9]")
+	if delim.regex.String() != "[0-9]" || delim.str != nil {
+		t.Error(delim)
+	}
+	// Tab character
+	delim = delimiterRegexp("\t")
+	if delim.regex != nil || *delim.str != "\t" {
+		t.Error(delim)
+	}
+	// Tab expression
+	delim = delimiterRegexp("\\t")
+	if delim.regex != nil || *delim.str != "\t" {
+		t.Error(delim)
+	}
+	// Tabs -> regex
+	delim = delimiterRegexp("\t+")
+	if delim.regex == nil || delim.str != nil {
+		t.Error(delim)
+	}
+}
+
+func TestDelimiterRegexString(t *testing.T) {
+	delim := delimiterRegexp("*")
+	tokens := Tokenize([]rune("-*--*---**---"), delim)
+	if delim.regex != nil ||
+		string(tokens[0].text) != "-*" ||
+		string(tokens[1].text) != "--*" ||
+		string(tokens[2].text) != "---*" ||
+		string(tokens[3].text) != "*" ||
+		string(tokens[4].text) != "---" {
+		t.Errorf("%s %s %d", delim, tokens, len(tokens))
+	}
+}
+
+func TestDelimiterRegexRegex(t *testing.T) {
+	delim := delimiterRegexp("--\\*")
+	tokens := Tokenize([]rune("-*--*---**---"), delim)
+	if delim.str != nil ||
+		string(tokens[0].text) != "-*--*" ||
+		string(tokens[1].text) != "---*" ||
+		string(tokens[2].text) != "*---" {
+		t.Errorf("%s %d", tokens, len(tokens))
 	}
 }
 

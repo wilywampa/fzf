@@ -80,7 +80,7 @@ function! s:shellesc(arg)
 endfunction
 
 function! s:escape(path)
-  return escape(a:path, ' %#\')
+  return escape(a:path, ' %#''"\')
 endfunction
 
 " Upgrade legacy options
@@ -218,7 +218,7 @@ function! s:execute(dict, command, temps)
   else
     let command = a:command
   endif
-  execute 'silent !'.command
+  execute 'silent !'.escape(command, '%#')
   redraw!
   if v:shell_error
     " Do not print error message on exit status 1
@@ -358,7 +358,7 @@ endfunction
 
 let s:default_action = {
   \ 'ctrl-m': 'e',
-  \ 'ctrl-t': 'tabedit',
+  \ 'ctrl-t': 'tab split',
   \ 'ctrl-x': 'split',
   \ 'ctrl-v': 'vsplit' }
 
@@ -384,7 +384,7 @@ function! s:cmd(bang, ...) abort
   let args = extend(['--expect='.join(keys(s:action), ',')], a:000)
   let opts = {}
   if len(args) > 0 && isdirectory(expand(args[-1]))
-    let opts.dir = remove(args, -1)
+    let opts.dir = substitute(remove(args, -1), '\\\(["'']\)', '\1', 'g')
   else
     let opts.dir = getcwd()
   endif
