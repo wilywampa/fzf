@@ -1,5 +1,7 @@
 # Setup fzf function
 # ------------------
+if [[ $- =~ i ]]; then
+
 if [[ ! -x $(whence -p fzf) ]]; then
   unalias fzf 2> /dev/null
   fzf() {
@@ -28,8 +30,6 @@ __neomru() {
   done
   echo
 }
-
-if [[ $- =~ i ]]; then
 
 if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
   fzf-file-widget() {
@@ -167,5 +167,7 @@ fzf-all-history-widget() {
 }
 zle     -N  fzf-all-history-widget
 bindkey 'Ò' fzf-all-history-widget  # <M-R>
+
+source ${0:A:h}/shell/completion.zsh
 
 fi
