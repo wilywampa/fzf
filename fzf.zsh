@@ -1,7 +1,5 @@
 # Setup fzf function
 # ------------------
-if [[ $- =~ i ]]; then
-
 if [[ ! -x $(whence -p fzf) ]]; then
   unalias fzf 2> /dev/null
   fzf() {
@@ -30,6 +28,8 @@ __neomru() {
   done
   echo
 }
+
+if [[ $- =~ i ]]; then
 
 if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
   fzf-file-widget() {
