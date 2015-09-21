@@ -1,6 +1,19 @@
 CHANGELOG
 =========
 
+0.10.6
+------
+
+- Replaced `--header-file` with `--header` option
+- `--header` and `--header-lines` can be used together
+- Changed exit status
+    - 0: Okay
+    - 1: No match
+    - 2: Error
+    - 130: Interrupted
+- 64-bit linux binary is statically-linked with ncurses to avoid
+  compatibility issues.
+
 0.10.5
 ------
 

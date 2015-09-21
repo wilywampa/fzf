@@ -42,6 +42,7 @@ type Terminal struct {
 	history    *History
 	cycle      bool
 	header     []string
+	header0    []string
 	ansi       bool
 	margin     [4]string
 	marginInt  [4]int
@@ -185,6 +186,12 @@ func defaultKeymap() map[int]actionType {
 // NewTerminal returns new Terminal object
 func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 	input := []rune(opts.Query)
+	var header []string
+	if opts.Reverse {
+		header = opts.Header
+	} else {
+		header = reverseStringArray(opts.Header)
+	}
 	return &Terminal{
 		inlineInfo: opts.InlineInfo,
 		prompt:     opts.Prompt,
@@ -207,7 +214,8 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 		margin:     opts.Margin,
 		marginInt:  [4]int{0, 0, 0, 0},
 		cycle:      opts.Cycle,
-		header:     opts.Header,
+		header:     header,
+		header0:    header,
 		ansi:       opts.Ansi,
 		reading:    true,
 		merger:     EmptyMerger,
@@ -241,18 +249,19 @@ func (t *Terminal) UpdateCount(cnt int, final bool) {
 	}
 }
 
-// UpdateHeader updates the header
-func (t *Terminal) UpdateHeader(header []string, lines int) {
-	t.mutex.Lock()
-	t.header = make([]string, lines)
-	copy(t.header, header)
-	if !t.reverse {
-		reversed := make([]string, lines)
-		for idx, str := range t.header {
-			reversed[lines-idx-1] = str
-		}
-		t.header = reversed
+func reverseStringArray(input []string) []string {
+	size := len(input)
+	reversed := make([]string, size)
+	for idx, str := range input {
+		reversed[size-idx-1] = str
 	}
+	return reversed
+}
+
+// UpdateHeader updates the header
+func (t *Terminal) UpdateHeader(header []string) {
+	t.mutex.Lock()
+	t.header = append(append([]string{}, t.header0...), header...)
 	t.mutex.Unlock()
 	t.reqBox.Set(reqHeader, nil)
 }
@@ -280,17 +289,19 @@ func (t *Terminal) UpdateList(merger *Merger) {
 	t.reqBox.Set(reqList, nil)
 }
 
-func (t *Terminal) output() {
+func (t *Terminal) output() bool {
 	if t.printQuery {
 		fmt.Println(string(t.input))
 	}
 	if len(t.expect) > 0 {
 		fmt.Println(t.pressed)
 	}
-	if len(t.selected) == 0 {
+	found := len(t.selected) > 0
+	if !found {
 		cnt := t.merger.Length()
 		if cnt > 0 && cnt > t.cy {
 			fmt.Println(t.merger.Get(t.cy).AsString(t.ansi))
+			found = true
 		}
 	} else {
 		sels := make([]selectedItem, 0, len(t.selected))
@@ -302,6 +313,7 @@ func (t *Terminal) output() {
 			fmt.Println(*sel.text)
 		}
 	}
+	return found
 }
 
 func runeWidth(r rune, prefixWidth int) int {
@@ -433,9 +445,6 @@ func (t *Terminal) printHeader() {
 	max := t.maxHeight()
 	var state *ansiState
 	for idx, lineStr := range t.header {
-		if !t.reverse {
-			idx = len(t.header) - idx - 1
-		}
 		line := idx + 2
 		if t.inlineInfo {
 			line--
@@ -743,7 +752,7 @@ func (t *Terminal) Loop() {
 	}
 
 	exit := func(code int) {
-		if code == 0 && t.history != nil {
+		if code <= exitNoMatch && t.history != nil {
 			t.history.append(string(t.input))
 		}
 		os.Exit(code)
@@ -776,11 +785,13 @@ func (t *Terminal) Loop() {
 						t.printAll()
 					case reqClose:
 						C.Close()
-						t.output()
-						exit(0)
+						if t.output() {
+							exit(exitOk)
+						}
+						exit(exitNoMatch)
 					case reqQuit:
 						C.Close()
-						exit(1)
+						exit(exitInterrupt)
 					}
 				}
 				t.placeCursor()

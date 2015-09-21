@@ -737,8 +737,8 @@ class TestGoFZF < TestBase
     assert_equal '6', readonce.chomp
   end
 
-  def test_header_file
-    tmux.send_keys "seq 100 | #{fzf "--header-file <(head -5 #{__FILE__})"}", :Enter
+  def test_header
+    tmux.send_keys "seq 100 | #{fzf "--header \\\"\\$(head -5 #{__FILE__})\\\""}", :Enter
     header = File.readlines(__FILE__).take(5).map(&:strip)
     tmux.until do |lines|
       lines[-2].include?('100/100') &&
@@ -746,12 +746,32 @@ class TestGoFZF < TestBase
     end
   end
 
-  def test_header_file_reverse
-    tmux.send_keys "seq 100 | #{fzf "--header-file=<(head -5 #{__FILE__}) --reverse"}", :Enter
+  def test_header_reverse
+    tmux.send_keys "seq 100 | #{fzf "--header=\\\"\\$(head -5 #{__FILE__})\\\" --reverse"}", :Enter
     header = File.readlines(__FILE__).take(5).map(&:strip)
     tmux.until do |lines|
       lines[1].include?('100/100') &&
       lines[2..6].map(&:strip) == header
+    end
+  end
+
+  def test_header_and_header_lines
+    tmux.send_keys "seq 100 | #{fzf "--header-lines 10 --header \\\"\\$(head -5 #{__FILE__})\\\""}", :Enter
+    header = File.readlines(__FILE__).take(5).map(&:strip)
+    tmux.until do |lines|
+      lines[-2].include?('90/90') &&
+      lines[-7...-2].map(&:strip) == header &&
+      lines[-17...-7].map(&:strip) == (1..10).map(&:to_s).reverse
+    end
+  end
+
+  def test_header_and_header_lines_reverse
+    tmux.send_keys "seq 100 | #{fzf "--reverse --header-lines 10 --header \\\"\\$(head -5 #{__FILE__})\\\""}", :Enter
+    header = File.readlines(__FILE__).take(5).map(&:strip)
+    tmux.until do |lines|
+      lines[1].include?('90/90') &&
+      lines[2...7].map(&:strip) == header &&
+      lines[7...17].map(&:strip) == (1..10).map(&:to_s)
     end
   end
 
@@ -780,11 +800,6 @@ class TestGoFZF < TestBase
     tmux.send_keys :Enter
   end
 
-  def test_invalid_term
-    tmux.send_keys "TERM=xxx fzf", :Enter
-    tmux.until { |lines| lines.any? { |l| l.include? 'Invalid $TERM: xxx' } }
-  end
-
   def test_with_nth
     writelines tempname, ['hello world ', 'byebye']
     assert_equal 'hello world ', `cat #{tempname} | #{FZF} -f"^he hehe" -x -n 2.. --with-nth 2,1,1`.chomp
@@ -799,6 +814,47 @@ class TestGoFZF < TestBase
     src = "\x1b[33mhello \x1b[34;1mworld\x1b[m "
     writelines tempname, [src, 'byebye']
     assert_equal src, `cat #{tempname} | #{FZF} -fhehe -x -n 2.. --with-nth 2,1,1 --no-ansi`.chomp
+  end
+
+  def test_exit_0_exit_code
+    `echo foo | #{FZF} -q bar -0`
+    assert_equal 1, $?.exitstatus
+  end
+
+  def test_invalid_term
+    lines = `TERM=xxx #{FZF}`
+    assert_equal 2, $?.exitstatus
+    assert lines.include?('Invalid $TERM: xxx')
+  end
+
+  def test_invalid_option
+    lines = `#{FZF} --foobar 2>&1`
+    assert_equal 2, $?.exitstatus
+    assert lines.include?('unknown option: --foobar'), lines
+  end
+
+  def test_filter_exitstatus
+    # filter / streaming filter
+    ["", "--no-sort"].each do |opts|
+      assert `echo foo | #{FZF} -f foo #{opts}`.include?('foo')
+      assert_equal 0, $?.exitstatus
+
+      assert `echo foo | #{FZF} -f bar #{opts}`.empty?
+      assert_equal 1, $?.exitstatus
+    end
+  end
+
+  def test_exitstatus_empty
+    { '99' => '0', '999' => '1' }.each do |query, status|
+      tmux.send_keys "seq 100 | #{FZF} -q #{query}", :Enter
+      tmux.until { |lines| lines[-2] =~ %r{ [10]/100} }
+      tmux.send_keys :Enter
+
+      tmux.send_keys 'echo --\$?--'
+      tmux.until { |lines| lines.last.include? "echo --$?--" }
+      tmux.send_keys :Enter
+      tmux.until { |lines| lines.last.include? "--#{status}--" }
+    end
   end
 
 private
