@@ -63,12 +63,13 @@ bindkey 'ã' fzf-cd-widget
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
+  setopt local_options extended_glob
   newbuffer=$(fc -l -${FZF_HIST_LIMIT:-5000} \
     | LC_ALL='C' sort -k 2 -r                \
     | LC_ALL='C' uniq -f 1                   \
     | LC_ALL='C' sort -n                     \
     | fzf +s +m -n..,1,2..)
-  newbuffer=${newbuffer##<0-9>## ##}
+  newbuffer=${newbuffer##${newbuffer[(w)1]} #}
   lines=(${(s:\n:)newbuffer})
   if [[ ${#lines} -eq 1 ]]; then
     LBUFFER=$newbuffer
