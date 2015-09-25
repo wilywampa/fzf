@@ -63,23 +63,12 @@ bindkey 'ã' fzf-cd-widget
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
-  setopt local_options extended_glob
   newbuffer=$(fc -l -${FZF_HIST_LIMIT:-5000} \
     | LC_ALL='C' sort -k 2 -r                \
     | LC_ALL='C' uniq -f 1                   \
     | LC_ALL='C' sort -n                     \
     | fzf +s +m -n..,1,2..)
-  newbuffer=${newbuffer##${newbuffer[(w)1]} #}
-  lines=(${(s:\n:)newbuffer})
-  if [[ ${#lines} -eq 1 ]]; then
-    LBUFFER=$newbuffer
-  else
-    for line in ${lines[1,-2]}; do
-      LBUFFER=${LBUFFER}${line}
-      zle vi-open-line-below
-    done
-    LBUFFER=${LBUFFER}${lines[-1]}
-  fi
+  zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
   zle redisplay
 }
 zle     -N   fzf-history-widget
@@ -88,7 +77,7 @@ zle     -N   fzf-history-widget
 # ALT-R - Paste the selected command from directory history into the command line
 fzf-dir-history-widget() {
   newbuffer=$(dirhist $PWD | fzf +s +m)
-  lines=(${(s:\n:)newbuffer})
+  lines=(${(s:\\n:)newbuffer})
   if [[ ${#lines} -eq 1 ]]; then
     LBUFFER=$newbuffer
   else
