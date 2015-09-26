@@ -68,7 +68,9 @@ fzf-history-widget() {
     | LC_ALL='C' uniq -f 1                   \
     | LC_ALL='C' sort -n                     \
     | fzf +s +m -n..,1,2..)
-  zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
+  if [[ -n $newbuffer ]]; then
+    zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
+  fi
   zle redisplay
 }
 zle     -N   fzf-history-widget
