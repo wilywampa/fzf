@@ -213,7 +213,7 @@ endfunction
 function! s:xterm_launcher()
   let fmt = 'xterm -T "[fzf]" -bg "\%s" -fg "\%s" -geometry %dx%d+%d+%d -e bash -ic %%s'
   if has('gui_macvim')
-    let fmt .= '; osascript -e "tell application \"MacVim\" to activate"'
+    let fmt .= '&& osascript -e "tell application \"MacVim\" to activate"'
   endif
   return printf(fmt,
     \ synIDattr(hlID("Normal"), "bg"), synIDattr(hlID("Normal"), "fg"),
@@ -221,6 +221,19 @@ function! s:xterm_launcher()
 endfunction
 unlet! s:launcher
 let s:launcher = function('s:xterm_launcher')
+
+function! s:exit_handler(code, command, ...)
+  if a:code == 130
+    return 0
+  elseif a:code > 1
+    call s:error('Error running ' . a:command)
+    if !empty(a:000)
+      sleep
+    endif
+    return 0
+  endif
+  return 1
+endfunction
 
 function! s:execute(dict, command, temps)
   call s:pushd(a:dict)
@@ -235,15 +248,7 @@ function! s:execute(dict, command, temps)
   endif
   execute 'silent !'.command
   redraw!
-  if v:shell_error
-    " Do not print error message on exit status 1 (no match) or 130 (interrupt)
-    if v:shell_error == 2
-      call s:error('Error running ' . command)
-    endif
-    return []
-  else
-    return s:callback(a:dict, a:temps)
-  endif
+  return s:exit_handler(v:shell_error, command) ? s:callback(a:dict, a:temps) : []
 endfunction
 
 function! s:execute_tmux(dict, command, temps)
@@ -255,11 +260,7 @@ function! s:execute_tmux(dict, command, temps)
 
   call system(command)
   redraw!
-  if v:shell_error == 2
-    call s:error('Error running ' . command)
-    return []
-  endif
-  return s:callback(a:dict, a:temps)
+  return s:exit_handler(v:shell_error, command) ? s:callback(a:dict, a:temps) : []
 endfunction
 
 function! s:calc_size(max, val, dict)
@@ -335,15 +336,12 @@ function! s:execute_term(dict, command, temps)
       endif
     endif
 
-    if a:code == 2
-      call s:error('Error running ' . s:command)
-      sleep
+    if !s:exit_handler(a:code, s:command, 1)
       return
     endif
 
     call s:pushd(self.dict)
     try
-      redraw!
       call s:callback(self.dict, self.temps)
 
       if inplace && bufnr('') == self.buf
