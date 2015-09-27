@@ -5,7 +5,6 @@ if [[ ! -x $(whence -p fzf) ]]; then
   fzf() {
     $FZF_RUBY_EXEC --disable-gems $HOME/.fzf/fzf "$@"
   }
-  export -f fzf > /dev/null
 fi
 [[ -z $FZF_DEFAULT_OPTS ]] && export FZF_DEFAULT_OPTS="+c -m"
 
