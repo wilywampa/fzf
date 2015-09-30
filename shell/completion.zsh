@@ -123,7 +123,7 @@ fzf-completion() {
   # Kill completion (do not require trigger sequence)
   if [ $cmd = kill -a ${LBUFFER[-1]} = ' ' ]; then
     [ ${FZF_TMUX:-1} -eq 1 ] && fzf="fzf-tmux -d ${FZF_TMUX_HEIGHT:-40%}" || fzf="fzf"
-    matches=$(ps -ef | sed 1d | ${=fzf} ${=FZF_COMPLETION_OPTS} -m | awk '{print $2}' | tr '\n' ' ')
+    matches=$(${FZF_PS_COMMAND:-{ps,-ef}} | sed 1d | ${=fzf} ${=FZF_COMPLETION_OPTS} -m | awk '{print $2}' | tr '\n' ' ')
     if [ -n "$matches" ]; then
       LBUFFER="$LBUFFER$matches"
     fi
