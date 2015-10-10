@@ -1,6 +1,19 @@
 CHANGELOG
 =========
 
+0.10.8
+------
+
+- Fixed panic when trying to set colors after colors are disabled (#370)
+
+0.10.7
+------
+
+- Fixed unserialized interrupt handling during execute action which often
+  caused invalid memory access and crash
+- Changed `--tiebreak=length` (default) to use trimmed length when `--nth` is
+  used
+
 0.10.6
 ------
 
