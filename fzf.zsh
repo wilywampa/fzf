@@ -109,7 +109,9 @@ fzf-recent-directory-widget() {
   # and trailing "'", remove the line with $PWD, then combine into one
   # directory per line of text
   local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}} | fzf +s)"
-  if [[ -n $dir ]]; then
+  if [[ $WIDGET == fzf-recent-directory-widget ]]; then
+    cd ${dir:-.}
+  elif [[ -n $dir ]]; then
     # Escape special characters
     for char in '*' '(' ')' '|' '<' '>' '[' ']' '?' ' '; do
       dir=${dir//$char/\\$char};
@@ -120,6 +122,8 @@ fzf-recent-directory-widget() {
 }
 zle     -N  fzf-recent-directory-widget
 bindkey 'ä' fzf-recent-directory-widget
+zle     -N  fzf-recent-directory-insert-widget fzf-recent-directory-widget
+bindkey 'Ä' fzf-recent-directory-insert-widget
 
 # ALT-D - open file from neomru
 if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
