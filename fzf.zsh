@@ -51,10 +51,22 @@ fi
 zle     -N   fzf-file-widget
 # bindkey '^T' fzf-file-widget
 
+_add_recent_dir() {
+  if (( $chpwd_functions[(I)chpwd_recent_dirs] )); then
+    autoload -Uz chpwd_recent_filehandler chpwd_recent_add
+    local -aU reply
+    chpwd_recent_filehandler
+    if [[ $reply[1] != $PWD ]]; then
+      chpwd_recent_add $PWD && chpwd_recent_filehandler $reply
+    fi
+  fi
+}
+
 # ALT-C - cd into the selected directory
 fzf-cd-widget() {
   cd "${$(set -o nonomatch; command find * -path '*/\.*' -prune \
           -o -type d -print 2> /dev/null | fzf):-.}"
+  _add_recent_dir
   zle reset-prompt
 }
 zle     -N    fzf-cd-widget
@@ -111,6 +123,7 @@ fzf-recent-directory-widget() {
   local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}} | fzf +s)"
   if [[ $WIDGET == fzf-recent-directory-widget ]]; then
     cd ${dir:-.}
+    _add_recent_dir
   elif [[ -n $dir ]]; then
     # Escape special characters
     for char in '*' '(' ')' '|' '<' '>' '[' ']' '?' ' '; do
