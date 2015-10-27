@@ -117,19 +117,14 @@ bindkey '^R' fzf-combined-widget
 
 # ALT-D - cd into recent directory
 fzf-recent-directory-widget() {
-  # Read file $HOME/.chpwd-recent-dirs into variable, strip the leading "$'"
-  # and trailing "'", remove the line with $PWD, then combine into one
-  # directory per line of text
-  local dir="$(echo ${(F)${${${${(fOa)mapfile[$HOME/.chpwd-recent-dirs]}/#$\'/}/%\'/}/#%$PWD/}} | fzf +s)"
+  # Read file $HOME/.chpwd-recent-dirs removing one level of quoting, remove
+  # the line with $PWD, then combine into one directory per line of text
+  local dir="$(echo ${(F)${${(fOaQ)mapfile[$HOME/.chpwd-recent-dirs]}/#%$PWD}} | fzf +s)"
   if [[ $WIDGET == fzf-recent-directory-widget ]]; then
     cd ${dir:-.}
     _add_recent_dir
   elif [[ -n $dir ]]; then
-    # Escape special characters
-    for char in '*' '(' ')' '|' '<' '>' '[' ']' '?' ' '; do
-      dir=${dir//$char/\\$char};
-    done
-    LBUFFER=$LBUFFER$dir
+    LBUFFER=$LBUFFER${(q)dir}
   fi
   zle reset-prompt
 }
