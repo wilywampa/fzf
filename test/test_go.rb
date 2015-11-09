@@ -8,7 +8,7 @@ DEFAULT_TIMEOUT = 20
 
 base = File.expand_path('../../', __FILE__)
 Dir.chdir base
-FZF = "#{base}/bin/fzf"
+FZF = "FZF_DEFAULT_OPTS= FZF_DEFAULT_COMMAND= #{base}/bin/fzf"
 
 class NilClass
   def include? str
@@ -213,7 +213,7 @@ class TestGoFZF < TestBase
   end
 
   def test_fzf_default_command
-    tmux.send_keys "FZF_DEFAULT_COMMAND='echo hello' #{fzf}", :Enter
+    tmux.send_keys fzf.sub('FZF_DEFAULT_COMMAND=', "FZF_DEFAULT_COMMAND='echo hello'"), :Enter
     tmux.until { |lines| lines.last =~ /^>/ }
 
     tmux.send_keys :Enter
@@ -904,6 +904,17 @@ class TestGoFZF < TestBase
     end
   end
 
+  def test_default_extended
+    assert_equal '100', `seq 100 | #{FZF} -f "1 00$"`.chomp
+    assert_equal '', `seq 100 | #{FZF} -f "1 00$" +x`.chomp
+  end
+
+  def test_exact
+    assert_equal 4, `seq 123 | #{FZF} -f 13`.lines.length
+    assert_equal 2, `seq 123 | #{FZF} -f 13 -e`.lines.length
+    assert_equal 4, `seq 123 | #{FZF} -f 13 +e`.lines.length
+  end
+
 private
   def writelines path, lines
     File.unlink path while File.exists? path
@@ -968,6 +979,22 @@ module TestShell
     tmux.prepare
     tmux.send_keys :pwd, :Enter
     tmux.until { |lines| lines[-1].end_with?(expected) }
+  end
+
+  def test_alt_c_command
+    set_var 'FZF_ALT_C_COMMAND', 'echo /tmp'
+
+    tmux.prepare
+    tmux.send_keys 'cd /', :Enter
+
+    tmux.prepare
+    tmux.send_keys :Escape, :c, pane: 0
+    lines = tmux.until(1) { |lines| lines.item_count == 1 }
+    tmux.send_keys :Enter, pane: 1
+
+    tmux.prepare
+    tmux.send_keys :pwd, :Enter
+    tmux.until { |lines| lines[-1].end_with? '/tmp' }
   end
 
   def test_ctrl_r
