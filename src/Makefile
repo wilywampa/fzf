@@ -42,7 +42,7 @@ android-build:
 
 test:
 	go get
-	go test -v ./...
+	SHELL=/bin/sh go test -v ./...
 
 install: $(BINDIR)/fzf
 
