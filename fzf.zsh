@@ -81,6 +81,7 @@ fzf-history-widget() {
     | fzf +s +m -n..,1,2..)
   if [[ -n $newbuffer ]]; then
     zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
+    zle undo 0
   fi
   zle redisplay
 }
