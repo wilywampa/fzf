@@ -881,7 +881,7 @@ class TestGoFZF < TestBase
     }.each do |ts, exp|
       tmux.prepare
       tmux.send_keys %[cat #{tempname} | fzf --tabstop=#{ts}], :Enter
-      tmux.until { |lines| lines[-3] == exp }
+      tmux.until { |lines| exp.start_with? lines[-3].to_s.strip.sub(/\.\.$/, '') }
       tmux.send_keys :Enter
     end
   end
@@ -1071,6 +1071,8 @@ module CompletionTest
     tmux.prepare
     tmux.send_keys 'cat /tmp/fzf-test/10**', :Tab, pane: 0
     tmux.until(1) { |lines| lines.item_count > 0 }
+    tmux.send_keys ' !d'
+    tmux.until(1) { |lines| lines[-2].include?(' 2/') }
     tmux.send_keys :BTab, :BTab
     tmux.until(1) { |lines| lines[-2].include?('(2)') }
     tmux.send_keys :Enter
@@ -1111,10 +1113,26 @@ module CompletionTest
       tmux.send_keys 'C-L'
       lines[-1].end_with?('/tmp/fzf\ test/foobar')
     end
+
+    # Should include hidden files
+    (1..100).each { |i| FileUtils.touch "/tmp/fzf-test/.hidden-#{i}" }
+    tmux.send_keys 'C-u'
+    tmux.send_keys 'cat /tmp/fzf-test/hidden**', :Tab, pane: 0
+    tmux.until(1) do |lines|
+      tmux.send_keys 'C-L'
+      lines[-2].include?('100/') &&
+      lines[-3].include?('/tmp/fzf-test/.hidden-')
+    end
   ensure
     ['/tmp/fzf-test', '/tmp/fzf test', '~/.fzf-home', 'no~such~user'].each do |f|
       FileUtils.rm_rf File.expand_path(f)
     end
+  end
+
+  def test_file_completion_root
+    tmux.send_keys 'ls /**', :Tab, pane: 0
+    tmux.until(1) { |lines| lines.item_count > 0 }
+    tmux.send_keys :Enter
   end
 
   def test_dir_completion
