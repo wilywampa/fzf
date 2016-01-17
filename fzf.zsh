@@ -80,10 +80,8 @@ fzf-history-widget() {
     | LC_ALL='C' sort -n                     \
     | fzf +s +m -n..,1,2..)
   if [[ -n $newbuffer ]]; then
-    zle undo 0
+    BUFFER=
     zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
-    zle undo 0
-    [[ -z $BUFFER ]] && zle redo
   fi
   zle redisplay
 }
