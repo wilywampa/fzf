@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"regexp"
 	"sort"
@@ -720,7 +719,7 @@ func quoteEntry(entry string) string {
 
 func executeCommand(template string, replacement string) {
 	command := strings.Replace(template, "{}", replacement, -1)
-	cmd := exec.Command("sh", "-c", command)
+	cmd := util.ExecCommand(command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -734,7 +733,7 @@ func (t *Terminal) Loop() {
 	<-t.startChan
 	{ // Late initialization
 		intChan := make(chan os.Signal, 1)
-		signal.Notify(intChan, os.Interrupt, os.Kill)
+		signal.Notify(intChan, os.Interrupt, os.Kill, syscall.SIGTERM)
 		go func() {
 			<-intChan
 			t.reqBox.Set(reqQuit, nil)
