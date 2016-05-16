@@ -132,13 +132,6 @@ type Options struct {
 	Version     bool
 }
 
-func defaultTheme() *curses.ColorTheme {
-	if strings.Contains(os.Getenv("TERM"), "256") {
-		return curses.Dark256
-	}
-	return curses.Default16
-}
-
 func defaultOptions() *Options {
 	return &Options{
 		Fuzzy:       true,
@@ -153,7 +146,7 @@ func defaultOptions() *Options {
 		Multi:       false,
 		Ansi:        false,
 		Mouse:       true,
-		Theme:       defaultTheme(),
+		Theme:       curses.EmptyTheme(),
 		Black:       false,
 		Reverse:     false,
 		Cycle:       false,
@@ -322,6 +315,10 @@ func parseKeyChords(str string, message string) map[int]string {
 			chord = curses.AltZ + int(' ')
 		case "bspace", "bs":
 			chord = curses.BSpace
+		case "alt-enter", "alt-return":
+			chord = curses.AltEnter
+		case "alt-space":
+			chord = curses.AltSpace
 		case "alt-bs", "alt-bspace":
 			chord = curses.AltBS
 		case "tab":
@@ -534,6 +531,8 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 			keymap[key] = actAbort
 		case "accept":
 			keymap[key] = actAccept
+		case "print-query":
+			keymap[key] = actPrintQuery
 		case "backward-char":
 			keymap[key] = actBackwardChar
 		case "backward-delete-char":
@@ -745,7 +744,7 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "--color":
 			spec := optionalNextString(allArgs, &i)
 			if len(spec) == 0 {
-				opts.Theme = defaultTheme()
+				opts.Theme = curses.EmptyTheme()
 			} else {
 				opts.Theme = parseTheme(opts.Theme, spec)
 			}
