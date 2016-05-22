@@ -44,6 +44,13 @@ __neomru() {
   echo
 }
 
+# List newest files in current directory
+__lsfiles() {
+  command ls -1Fr --sort=time 2> /dev/null | $(__fzfcmd) --no-sort --multi | \
+    while read item; do; echo -n "${(q)item} "; done
+  echo
+}
+
 if [[ $- =~ i ]]; then
 
 fzf-file-widget() {
@@ -144,6 +151,14 @@ fzf-neomru-widget() {
 zle     -N   fzf-neomru-widget
 bindkey '^Y' fzf-neomru-widget
 
+# CTRL-X CTRL-F - open files in current directory
+fzf-lsfiles-widget() {
+  LBUFFER="${LBUFFER}$(__lsfiles)"
+  zle redisplay
+}
+zle     -N     fzf-lsfiles-widget
+bindkey '^X^F' fzf-lsfiles-widget
+
 fzf-alt-combined-widget() {
   if [[ -z $BUFFER ]]; then
     zle fzf-dir-history-widget
@@ -159,6 +174,24 @@ fzf-all-history-widget() {
 }
 zle     -N  fzf-all-history-widget
 bindkey 'Ò' fzf-all-history-widget  # <M-R>
+
+fzf-window-words-widget() {
+  tmux list-panes -F '#{pane_id}' |
+  xargs -n1 tmux capture-pane -p -t |
+  command sed -e 'p;s/[^a-zA-Z0-9_]/ /g' |
+  command tr -s '[:space:]' '\n' |
+  command grep -o '\S.\+\S' |
+  LC_ALL='C' uniq |
+  LC_ALL='C' awk '{ print length(), $0 | "sort -n" | print $2 }' |
+  LC_ALL='C' awk '{ print $2 }' |
+  fzf --no-sort --multi |
+  while read item; do
+    LBUFFER="${LBUFFER}${(q)item} "
+  done
+  zle redisplay
+}
+zle     -N     fzf-window-words-widget
+bindkey '^X^W' fzf-window-words-widget
 
 source ${0:A:h}/shell/completion.zsh
 
