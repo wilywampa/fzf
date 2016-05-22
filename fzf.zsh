@@ -8,46 +8,48 @@ if [[ ! -x $(whence -p fzf) ]]; then
 fi
 [[ -z $FZF_DEFAULT_OPTS ]] && export FZF_DEFAULT_OPTS="+c -m"
 
+__fzfcmd() {
+  (( ${FZF_TMUX:-$+commands[fzf-tmux]} )) && echo "fzf-tmux -d${FZF_TMUX_HEIGHT:-40%}" || echo "fzf"
+}
+
 # Key bindings
 # ------------
 # CTRL-T - Paste the selected file path(s) into the command line
 __fsel() {
-  set -o nonomatch
-  $FZF_DEFAULT_COMMAND 2> /dev/null | fzf -m | while read item; do
-    printf '%q ' "$item"
+  local cmd
+  if [[ -n $FZF_CTRL_T_COMMAND ]]; then
+    cmd=$FZF_CTRL_T_COMMAND
+  elif (( $+commands[ag] )); then
+    cmd='command ag -g ""'
+  else
+    cmd="command find -L . \\( -path '*/\\.*' -o -fstype 'dev' -o -fstype 'proc' \\) -prune \
+    -o -type f -print \
+    -o -type d -print \
+    -o -type l -print 2> /dev/null | sed 1d | cut -b3-"
+  fi
+  eval "$cmd" | $(__fzfcmd) -m | while read item; do
+    echo -n "${(q)item} "
   done
   echo
 }
+
+# Recent files from neomru
 zmodload zsh/mapfile
 __neomru() {
   set -o nonomatch
   echo ${(F)${(fOa)mapfile[$HOME/.cache/neomru/file]}[1,-2]} \
-    2> /dev/null | fzf -m +s | while read item; do
-    printf '%q ' "$item"
+    2> /dev/null | $(__fzfcmd) -m +s | while read item; do
+    echo -n "${(q)item} "
   done
   echo
 }
 
 if [[ $- =~ i ]]; then
 
-if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
-  fzf-file-widget() {
-    local height
-    height=${FZF_TMUX_HEIGHT:-40%}
-    if [[ $height =~ %$ ]]; then
-      height="-p ${height%\%}"
-    else
-      height="-l $height"
-    fi
-    tmux split-window $height "zsh -c 'cd $PWD; source ~/.fzf.zsh; \
-      tmux send-keys -t $TMUX_PANE \"\$(__fsel)\"'"
-  }
-else
-  fzf-file-widget() {
-    LBUFFER="${LBUFFER}$(__fsel)"
-    zle redisplay
-  }
-fi
+fzf-file-widget() {
+  LBUFFER="${LBUFFER}$(__fsel)"
+  zle redisplay
+}
 zle     -N   fzf-file-widget
 # bindkey '^T' fzf-file-widget
 
@@ -70,7 +72,7 @@ fzf-cd-widget() {
   zle reset-prompt
 }
 zle     -N    fzf-cd-widget
-bindkey 'ã' fzf-cd-widget
+bindkey 'ã' fzf-cd-widget  # <M-c>
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
@@ -130,29 +132,15 @@ fzf-recent-directory-widget() {
   zle reset-prompt
 }
 zle     -N  fzf-recent-directory-widget
-bindkey 'ä' fzf-recent-directory-widget
-zle     -N  fzf-recent-directory-insert-widget fzf-recent-directory-widget
-bindkey 'Ä' fzf-recent-directory-insert-widget
+bindkey 'ä' fzf-recent-directory-widget  # <M-d>
+zle     -N  fzf-recent-directory-insert-widget
+bindkey 'Ä' fzf-recent-directory-insert-widget  # <M-D>
 
 # ALT-D - open file from neomru
-if [ -n "$TMUX_PANE" -a ${FZF_TMUX:-1} -ne 0 -a ${LINES:-40} -gt 15 ]; then
-  fzf-neomru-widget() {
-    local height
-    height=${FZF_TMUX_HEIGHT:-40%}
-    if [[ $height =~ %$ ]]; then
-      height="-p ${height%\%}"
-    else
-      height="-l $height"
-    fi
-    tmux split-window $height "zsh -c 'cd $PWD; source ~/.fzf.zsh; \
-      tmux send-keys -t $TMUX_PANE \"\$(__neomru)\"'"
-  }
-else
-  fzf-neomru-widget() {
-    LBUFFER="${LBUFFER}$(__neomru)"
-    zle redisplay
-  }
-fi
+fzf-neomru-widget() {
+  LBUFFER="${LBUFFER}$(__neomru)"
+  zle redisplay
+}
 zle     -N   fzf-neomru-widget
 bindkey '^Y' fzf-neomru-widget
 
