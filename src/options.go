@@ -45,6 +45,7 @@ const usage = `usage: fzf [options]
     --hscroll-off=COL     Number of screen columns to keep to the right of the
                           highlighted substring (default: 10)
     --inline-info         Display finder info inline with the query
+    --jump-labels=CHARS   Label characters for jump and jump-accept
     --prompt=STR          Input prompt (default: '> ')
     --bind=KEYBINDS       Custom key bindings. Refer to the man page.
     --history=FILE        History file
@@ -112,6 +113,7 @@ type Options struct {
 	Hscroll     bool
 	HscrollOff  int
 	InlineInfo  bool
+	JumpLabels  string
 	Prompt      string
 	Query       string
 	Select1     bool
@@ -153,6 +155,7 @@ func defaultOptions() *Options {
 		Hscroll:     true,
 		HscrollOff:  10,
 		InlineInfo:  false,
+		JumpLabels:  defaultJumpLabels,
 		Prompt:      "> ",
 		Query:       "",
 		Select1:     false,
@@ -319,6 +322,8 @@ func parseKeyChords(str string, message string) map[int]string {
 			chord = curses.AltEnter
 		case "alt-space":
 			chord = curses.AltSpace
+		case "alt-/":
+			chord = curses.AltSlash
 		case "alt-bs", "alt-bspace":
 			chord = curses.AltBS
 		case "tab":
@@ -343,12 +348,14 @@ func parseKeyChords(str string, message string) map[int]string {
 			chord = curses.SRight
 		case "double-click":
 			chord = curses.DoubleClick
+		case "f10":
+			chord = curses.F10
 		default:
 			if len(key) == 6 && strings.HasPrefix(lkey, "ctrl-") && isAlphabet(lkey[5]) {
 				chord = curses.CtrlA + int(lkey[5]) - 'a'
 			} else if len(key) == 5 && strings.HasPrefix(lkey, "alt-") && isAlphabet(lkey[4]) {
 				chord = curses.AltA + int(lkey[4]) - 'a'
-			} else if len(key) == 2 && strings.HasPrefix(lkey, "f") && key[1] >= '1' && key[1] <= '4' {
+			} else if len(key) == 2 && strings.HasPrefix(lkey, "f") && key[1] >= '1' && key[1] <= '9' {
 				chord = curses.F1 + int(key[1]) - '1'
 			} else if utf8.RuneCountInString(key) == 1 {
 				chord = curses.AltZ + int([]rune(key)[0])
@@ -553,6 +560,10 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 			keymap[key] = actForwardChar
 		case "forward-word":
 			keymap[key] = actForwardWord
+		case "jump":
+			keymap[key] = actJump
+		case "jump-accept":
+			keymap[key] = actJumpAccept
 		case "kill-line":
 			keymap[key] = actKillLine
 		case "kill-word":
@@ -713,6 +724,7 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.History.maxSize = historyMax
 		}
 	}
+	validateJumpLabels := false
 	for i := 0; i < len(allArgs); i++ {
 		arg := allArgs[i]
 		switch arg {
@@ -804,6 +816,9 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.InlineInfo = true
 		case "--no-inline-info":
 			opts.InlineInfo = false
+		case "--jump-labels":
+			opts.JumpLabels = nextString(allArgs, &i, "label characters required")
+			validateJumpLabels = true
 		case "-1", "--select-1":
 			opts.Select1 = true
 		case "+1", "--no-select-1":
@@ -891,6 +906,8 @@ func parseOptions(opts *Options, allArgs []string) {
 				opts.Tabstop = atoi(value)
 			} else if match, value := optString(arg, "--hscroll-off="); match {
 				opts.HscrollOff = atoi(value)
+			} else if match, value := optString(arg, "--jump-labels="); match {
+				opts.JumpLabels = value
 			} else {
 				errorExit("unknown option: " + arg)
 			}
@@ -907,6 +924,18 @@ func parseOptions(opts *Options, allArgs []string) {
 
 	if opts.Tabstop < 1 {
 		errorExit("tab stop must be a positive integer")
+	}
+
+	if len(opts.JumpLabels) == 0 {
+		errorExit("empty jump labels")
+	}
+
+	if validateJumpLabels {
+		for _, r := range opts.JumpLabels {
+			if r < 32 || r > 126 {
+				errorExit("non-ascii jump labels are not allowed")
+			}
+		}
 	}
 }
 
