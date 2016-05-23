@@ -176,18 +176,16 @@ zle     -N  fzf-all-history-widget
 bindkey 'Ò' fzf-all-history-widget  # <M-R>
 
 fzf-window-words-widget() {
-  tmux list-panes -F '#{pane_id}' |
+  local result=$( tmux list-panes -F '#{pane_id}' |
   xargs -n1 tmux capture-pane -p -t |
   command sed -e 'p;s/[^a-zA-Z0-9_]/ /g' |
   command tr -s '[:space:]' '\n' |
   command grep -o '\S.\+\S' |
-  LC_ALL='C' uniq |
-  LC_ALL='C' awk '{ print length(), $0 | "sort -n" | print $2 }' |
+  LC_ALL='C' awk '{ print length(), $0 | "sort -n" }' |
   LC_ALL='C' awk '{ print $2 }' |
-  fzf --no-sort --multi |
-  while read item; do
-    LBUFFER="${LBUFFER}${(q)item} "
-  done
+  LC_ALL='C' uniq |
+  fzf --no-sort --multi )
+  LBUFFER=${LBUFFER}${(j: :)${(f)result}}
   zle redisplay
 }
 zle     -N     fzf-window-words-widget
