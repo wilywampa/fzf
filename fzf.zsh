@@ -51,6 +51,13 @@ __lsfiles() {
   echo
 }
 
+# List git commits
+__hashes() {
+  local commit
+  commit=$(git log --pretty=oneline --abbrev-commit --reverse | $(__fzfcmd) +s +m -n..,1,2..)
+  [[ -n $commit ]] && printf "%s" ${commit[(w)1]} || printf ""
+}
+
 if [[ $- =~ i ]]; then
 
 fzf-file-widget() {
@@ -114,6 +121,14 @@ fzf-dir-history-widget() {
 }
 zle     -N           fzf-dir-history-widget
 bindkey -M viins 'ò' fzf-dir-history-widget  # <M-r>
+
+# CTRL-X CTRL-G - Paste a git commit hash into the command line
+fzf-git-hash-widget() {
+  LBUFFER="${LBUFFER}$(__hashes)"
+  zle redisplay
+}
+zle     -N     fzf-git-hash-widget
+bindkey '^X^G' fzf-git-hash-widget
 
 fzf-combined-widget() {
   if [[ -z $BUFFER ]]; then
