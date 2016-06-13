@@ -1,6 +1,15 @@
 CHANGELOG
 =========
 
+0.13.0
+------
+- Added preview feature
+    - `--preview CMD`
+    - `--preview-window POS[:SIZE][:hidden]`
+- `{}` in execute action is now replaced to the single-quoted (instead of
+  double-quoted) string of the current line
+- Fixed to ignore control characters for bracketed paste mode
+
 0.12.2
 ------
 

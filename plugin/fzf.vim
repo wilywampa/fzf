@@ -49,7 +49,7 @@ function! s:fzf_exec()
       throw 'fzf executable not found'
     endif
   endif
-  return s:exec
+  return s:shellesc(s:exec)
 endfunction
 
 function! s:tmux_enabled()
@@ -140,10 +140,10 @@ try
   else
     let prefix = ''
   endif
-  let tmux = !has('nvim') && s:tmux_enabled() && s:splittable(dict)
+  let tmux = (!has('nvim') || get(g:, 'fzf_prefer_tmux', 0)) && s:tmux_enabled() && s:splittable(dict)
   let command = prefix.(tmux ? s:fzf_tmux(dict) : fzf_exec).' '.optstr.' > '.temps.result
 
-  if has('nvim')
+  if has('nvim') && !tmux
     return s:execute_term(dict, command, temps)
   endif
 
@@ -179,7 +179,7 @@ function! s:fzf_tmux(dict)
     endif
   endfor
   return printf('LINES=%d COLUMNS=%d %s %s %s --',
-    \ &lines, &columns, s:fzf_tmux, size, (has_key(a:dict, 'source') ? '' : '-'))
+    \ &lines, &columns, s:shellesc(s:fzf_tmux), size, (has_key(a:dict, 'source') ? '' : '-'))
 endfunction
 
 function! s:splittable(dict)
@@ -193,7 +193,7 @@ function! s:pushd(dict)
       return 1
     endif
     let a:dict.prev_dir = cwd
-    execute 'chdir' s:escape(a:dict.dir)
+    execute 'lcd' s:escape(a:dict.dir)
     let a:dict.dir = getcwd()
     return 1
   endif
@@ -214,7 +214,7 @@ function! s:popd(dict, lines)
   "   directory is not expected and should be undone.
   if has_key(a:dict, 'prev_dir') &&
         \ (!&autochdir || (empty(a:lines) || len(a:lines) == 1 && empty(a:lines[0])))
-    execute 'chdir' s:escape(remove(a:dict, 'prev_dir'))
+    execute 'lcd' s:escape(remove(a:dict, 'prev_dir'))
   endif
 endfunction
 

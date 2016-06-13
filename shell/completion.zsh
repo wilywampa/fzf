@@ -110,6 +110,7 @@ _fzf_complete_telnet() {
 _fzf_complete_ssh() {
   _fzf_complete '+m' "$@" < <(
     cat <(cat ~/.ssh/config /etc/ssh/ssh_config 2> /dev/null | \grep -i '^host' | \grep -v '*') \
+        <(\grep -oE '^[^ ]+' ~/.ssh/known_hosts | tr ',' '\n' | awk '{ print $1 " " $1 }') \
         <(\grep -v '^\s*\(#\|$\)' /etc/hosts | \grep -Fv '0.0.0.0') |
         awk '{if (length($2) > 0) {print $2}}' | sort -u
   )
@@ -180,8 +181,11 @@ fzf-completion() {
   fi
 }
 
-[ -z "$fzf_default_completion" ] &&
-  fzf_default_completion=$(bindkey '^I' | \grep -v undefined-key | awk '{print $2}')
+[ -z "$fzf_default_completion" ] && {
+  binding=$(bindkey '^I')
+  [[ $binding =~ 'undefined-key' ]] || fzf_default_completion=$binding[(w)2]
+  unset binding
+}
 
 zle     -N   fzf-completion
 bindkey '^I' fzf-completion
