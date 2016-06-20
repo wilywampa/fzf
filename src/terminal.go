@@ -82,6 +82,11 @@ type selectedItem struct {
 
 type byTimeOrder []selectedItem
 
+type previewRequest struct {
+	ok  bool
+	str string
+}
+
 func (a byTimeOrder) Len() int {
 	return len(a)
 }
@@ -556,7 +561,7 @@ func (t *Terminal) printHeader() {
 		if line >= max {
 			continue
 		}
-		trimmed, colors, newState := extractColor(lineStr, state)
+		trimmed, colors, newState := extractColor(lineStr, state, nil)
 		state = newState
 		item := &Item{
 			text:   []rune(trimmed),
@@ -730,25 +735,13 @@ func (t *Terminal) printHighlighted(item *Item, bold bool, col1 int, col2 int, c
 }
 
 func (t *Terminal) printPreview() {
-	trimmed, ansiOffsets, _ := extractColor(t.previewTxt, nil)
-	var index int32
 	t.pwindow.Erase()
-	for _, o := range ansiOffsets {
-		b := o.offset[0]
-		e := o.offset[1]
-		if b > index {
-			if !t.pwindow.Fill(trimmed[index:b]) {
-				return
-			}
+	extractColor(t.previewTxt, nil, func(str string, ansi *ansiState) bool {
+		if ansi != nil && ansi.colored() {
+			return t.pwindow.CFill(str, ansi.fg, ansi.bg, ansi.bold)
 		}
-		if !t.pwindow.CFill(trimmed[b:e], o.color.fg, o.color.bg, o.color.bold) {
-			return
-		}
-		index = e
-	}
-	if int(index) < len(trimmed) {
-		t.pwindow.Fill(trimmed[index:])
-	}
+		return t.pwindow.Fill(str)
+	})
 }
 
 func processTabs(runes []rune, prefixWidth int) (string, int) {
@@ -920,21 +913,23 @@ func (t *Terminal) Loop() {
 	if t.hasPreviewWindow() {
 		go func() {
 			for {
-				focused := ""
+				request := previewRequest{false, ""}
 				t.previewBox.Wait(func(events *util.Events) {
 					for req, value := range *events {
 						switch req {
 						case reqPreviewEnqueue:
-							focused = value.(string)
+							request = value.(previewRequest)
 						}
 					}
 					events.Clear()
 				})
-				if len(focused) > 0 {
-					command := strings.Replace(t.preview.command, "{}", quoteEntry(focused), -1)
+				if request.ok {
+					command := strings.Replace(t.preview.command, "{}", quoteEntry(request.str), -1)
 					cmd := util.ExecCommand(command)
 					out, _ := cmd.CombinedOutput()
 					t.reqBox.Set(reqPreviewDisplay, string(out))
+				} else {
+					t.reqBox.Set(reqPreviewDisplay, "")
 				}
 			}
 		}()
@@ -948,7 +943,7 @@ func (t *Terminal) Loop() {
 	}
 
 	go func() {
-		focused := ""
+		focused := previewRequest{false, ""}
 		for {
 			t.reqBox.Wait(func(events *util.Events) {
 				defer events.Clear()
@@ -965,19 +960,17 @@ func (t *Terminal) Loop() {
 					case reqList:
 						t.printList()
 						cnt := t.merger.Length()
+						var currentFocus previewRequest
 						if cnt > 0 && cnt > t.cy {
-							currentFocus := t.current()
-							if currentFocus != focused {
-								focused = currentFocus
-								if t.isPreviewEnabled() {
-									t.previewBox.Set(reqPreviewEnqueue, focused)
-								}
-							}
+							currentFocus = previewRequest{true, t.current()}
 						} else {
-							if focused != "" && t.isPreviewEnabled() {
-								t.pwindow.Erase()
+							currentFocus = previewRequest{false, ""}
+						}
+						if currentFocus != focused {
+							focused = currentFocus
+							if t.isPreviewEnabled() {
+								t.previewBox.Set(reqPreviewEnqueue, focused)
 							}
-							focused = ""
 						}
 					case reqJump:
 						if t.merger.Length() == 0 {
@@ -1088,7 +1081,7 @@ func (t *Terminal) Loop() {
 					t.resizeWindows()
 					cnt := t.merger.Length()
 					if t.previewing && cnt > 0 && cnt > t.cy {
-						t.previewBox.Set(reqPreviewEnqueue, t.current())
+						t.previewBox.Set(reqPreviewEnqueue, previewRequest{true, t.current()})
 					}
 					req(reqList, reqInfo)
 				}

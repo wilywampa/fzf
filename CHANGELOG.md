@@ -1,6 +1,14 @@
 CHANGELOG
 =========
 
+0.13.2
+------
+- Fixed race condition where preview window is not properly cleared
+
+0.13.1
+------
+- Fixed UI issue with large `--preview` output with many ANSI codes
+
 0.13.0
 ------
 - Added preview feature
