@@ -154,13 +154,21 @@ function! s:common_sink(action, lines) abort
   endtry
 endfunction
 
-" name string, [opts dict, [fullscreen boolean]]
-function! fzf#wrap(name, ...)
-  if type(a:name) != type('')
-    throw 'invalid name type: string expected'
-  endif
-  let opts = copy(get(a:000, 0, {}))
-  let bang = get(a:000, 1, 0)
+" [name string,] [opts dict,] [fullscreen boolean]
+function! fzf#wrap(...)
+  let args = ['', {}, 0]
+  let expects = map(copy(args), 'type(v:val)')
+  let tidx = 0
+  for arg in copy(a:000)
+    let tidx = index(expects, type(arg), tidx)
+    if tidx < 0
+      throw 'invalid arguments (expected: [name string] [opts dict] [fullscreen boolean])'
+    endif
+    let args[tidx] = arg
+    let tidx += 1
+    unlet arg
+  endfor
+  let [name, opts, bang] = args
 
   " Layout: g:fzf_layout (and deprecated g:fzf_height)
   if bang
@@ -179,12 +187,12 @@ function! fzf#wrap(name, ...)
 
   " History: g:fzf_history_dir
   let opts.options = get(opts, 'options', '')
-  if len(get(g:, 'fzf_history_dir', ''))
+  if len(name) && len(get(g:, 'fzf_history_dir', ''))
     let dir = expand(g:fzf_history_dir)
     if !isdirectory(dir)
       call mkdir(dir, 'p')
     endif
-    let opts.options = join(['--history', s:escape(dir.'/'.a:name), opts.options])
+    let opts.options = join(['--history', s:escape(dir.'/'.name), opts.options])
   endif
 
   " Action: g:fzf_action
@@ -204,7 +212,7 @@ function! fzf#run(...) abort
 try
   let oshell = &shell
   set shell=sh
-  if has('nvim') && bufexists('term://*:FZF')
+  if has('nvim') && len(filter(range(1, bufnr('$')), 'bufname(v:val) =~# ";#FZF"'))
     call s:warn('FZF is already running!')
     return []
   endif
@@ -348,8 +356,9 @@ function! s:execute(dict, command, temps) abort
     let command = escaped
   endif
   execute 'silent !'.command
+  let exit_status = v:shell_error
   redraw!
-  return s:exit_handler(v:shell_error, command) ? s:collect(a:temps) : []
+  return s:exit_handler(exit_status, command) ? s:collect(a:temps) : []
 endfunction
 
 function! s:execute_tmux(dict, command, temps) abort
@@ -360,8 +369,9 @@ function! s:execute_tmux(dict, command, temps) abort
   endif
 
   call system(command)
+  let exit_status = v:shell_error
   redraw!
-  return s:exit_handler(v:shell_error, command) ? s:collect(a:temps) : []
+  return s:exit_handler(exit_status, command) ? s:collect(a:temps) : []
 endfunction
 
 function! s:calc_size(max, val, dict)
@@ -422,7 +432,7 @@ endfunction
 function! s:execute_term(dict, command, temps) abort
   let [ppos, winopts] = s:split(a:dict)
   let fzf = { 'buf': bufnr('%'), 'ppos': ppos, 'dict': a:dict, 'temps': a:temps,
-            \ 'name': 'FZF', 'winopts': winopts, 'command': a:command }
+            \ 'winopts': winopts, 'command': a:command }
   function! fzf.switch_back(inplace)
     if a:inplace && bufnr('') == self.buf
       " FIXME: Can't re-enter normal mode from terminal mode
@@ -450,6 +460,10 @@ function! s:execute_term(dict, command, temps) abort
       execute self.ppos.win.'wincmd w'
     endif
 
+    if bufexists(self.buf)
+      execute 'bd!' self.buf
+    endif
+
     if !s:exit_handler(a:code, self.command, 1)
       return
     endif
@@ -464,7 +478,7 @@ function! s:execute_term(dict, command, temps) abort
     if s:present(a:dict, 'dir')
       execute 'lcd' s:escape(a:dict.dir)
     endif
-    call termopen(a:command, fzf)
+    call termopen(a:command . ';#FZF', fzf)
   finally
     if s:present(a:dict, 'dir')
       lcd -
@@ -550,4 +564,3 @@ command! -nargs=* -complete=dir -bang FZF call s:cmd(<bang>0, <f-args>)
 
 let &cpo = s:cpo_save
 unlet s:cpo_save
-

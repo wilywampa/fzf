@@ -28,15 +28,10 @@ package fzf
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/junegunn/fzf/src/util"
 )
-
-func initProcs() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
-}
 
 /*
 Reader   -> EvtReadFin
@@ -49,8 +44,6 @@ Matcher  -> EvtHeader         -> Terminal (update header)
 
 // Run starts fzf
 func Run(opts *Options) {
-	initProcs()
-
 	sort := opts.Sort > 0
 	sortCriteria = opts.Criteria
 
@@ -63,29 +56,29 @@ func Run(opts *Options) {
 	eventBox := util.NewEventBox()
 
 	// ANSI code processor
-	ansiProcessor := func(data []byte) ([]rune, []ansiOffset) {
-		return util.BytesToRunes(data), nil
+	ansiProcessor := func(data []byte) (util.Chars, *[]ansiOffset) {
+		return util.ToChars(data), nil
 	}
-	ansiProcessorRunes := func(data []rune) ([]rune, []ansiOffset) {
-		return data, nil
+	ansiProcessorRunes := func(data []rune) (util.Chars, *[]ansiOffset) {
+		return util.RunesToChars(data), nil
 	}
 	if opts.Ansi {
 		if opts.Theme != nil {
 			var state *ansiState
-			ansiProcessor = func(data []byte) ([]rune, []ansiOffset) {
+			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
 				trimmed, offsets, newState := extractColor(string(data), state, nil)
 				state = newState
-				return []rune(trimmed), offsets
+				return util.RunesToChars([]rune(trimmed)), offsets
 			}
 		} else {
 			// When color is disabled but ansi option is given,
 			// we simply strip out ANSI codes from the input
-			ansiProcessor = func(data []byte) ([]rune, []ansiOffset) {
+			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
 				trimmed, _, _ := extractColor(string(data), nil, nil)
-				return []rune(trimmed), nil
+				return util.RunesToChars([]rune(trimmed)), nil
 			}
 		}
-		ansiProcessorRunes = func(data []rune) ([]rune, []ansiOffset) {
+		ansiProcessorRunes = func(data []rune) (util.Chars, *[]ansiOffset) {
 			return ansiProcessor([]byte(string(data)))
 		}
 	}
@@ -100,29 +93,28 @@ func Run(opts *Options) {
 				eventBox.Set(EvtHeader, header)
 				return nil
 			}
-			runes, colors := ansiProcessor(data)
+			chars, colors := ansiProcessor(data)
 			return &Item{
-				text:   runes,
-				colors: colors,
-				rank:   buildEmptyRank(int32(index))}
+				index:  int32(index),
+				text:   chars,
+				colors: colors}
 		})
 	} else {
 		chunkList = NewChunkList(func(data []byte, index int) *Item {
-			runes := util.BytesToRunes(data)
-			tokens := Tokenize(runes, opts.Delimiter)
+			tokens := Tokenize(util.ToChars(data), opts.Delimiter)
 			trans := Transform(tokens, opts.WithNth)
 			if len(header) < opts.HeaderLines {
 				header = append(header, string(joinTokens(trans)))
 				eventBox.Set(EvtHeader, header)
 				return nil
 			}
+			textRunes := joinTokens(trans)
 			item := Item{
-				text:     joinTokens(trans),
-				origText: &runes,
-				colors:   nil,
-				rank:     buildEmptyRank(int32(index))}
+				index:    int32(index),
+				origText: &data,
+				colors:   nil}
 
-			trimmed, colors := ansiProcessorRunes(item.text)
+			trimmed, colors := ansiProcessorRunes(textRunes)
 			item.text = trimmed
 			item.colors = colors
 			return &item
@@ -151,7 +143,7 @@ func Run(opts *Options) {
 	}
 	patternBuilder := func(runes []rune) *Pattern {
 		return BuildPattern(
-			opts.Fuzzy, opts.Extended, opts.Case, forward,
+			opts.Fuzzy, opts.Extended, opts.Case, forward, opts.Filter == nil,
 			opts.Nth, opts.Delimiter, runes)
 	}
 	matcher := NewMatcher(patternBuilder, sort, opts.Tac, eventBox)
@@ -169,9 +161,11 @@ func Run(opts *Options) {
 			reader := Reader{
 				func(runes []byte) bool {
 					item := chunkList.trans(runes, 0)
-					if item != nil && pattern.MatchItem(item) {
-						fmt.Println(string(item.text))
-						found = true
+					if item != nil {
+						if result, _ := pattern.MatchItem(item); result != nil {
+							fmt.Println(item.text.ToString())
+							found = true
+						}
 					}
 					return false
 				}, eventBox, opts.ReadZero}
@@ -185,7 +179,7 @@ func Run(opts *Options) {
 				chunks:  snapshot,
 				pattern: pattern})
 			for i := 0; i < merger.Length(); i++ {
-				fmt.Println(merger.Get(i).AsString(opts.Ansi))
+				fmt.Println(merger.Get(i).item.AsString(opts.Ansi))
 				found = true
 			}
 		}
@@ -265,7 +259,7 @@ func Run(opts *Options) {
 										fmt.Println()
 									}
 									for i := 0; i < count; i++ {
-										fmt.Println(val.Get(i).AsString(opts.Ansi))
+										fmt.Println(val.Get(i).item.AsString(opts.Ansi))
 									}
 									if count > 0 {
 										os.Exit(exitOk)
