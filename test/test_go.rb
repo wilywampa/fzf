@@ -136,8 +136,10 @@ class Tmux
   def prepare
     tries = 0
     begin
-      self.send_keys 'C-u', 'hello', 'Right'
-      self.until { |lines| lines[-1].end_with?('hello') }
+      self.until do |lines|
+        self.send_keys 'C-u', 'hello'
+        lines[-1].end_with?('hello')
+      end
     rescue Exception
       (tries += 1) < 5 ? retry : raise
     end
@@ -452,6 +454,15 @@ class TestGoFZF < TestBase
     assert_equal ['55', 'alt-z', '55'], readonce.split($/)
   end
 
+  def test_expect_printable_character_print_query
+    tmux.send_keys "seq 1 100 | #{fzf '--expect=z --print-query'}", :Enter
+    tmux.until { |lines| lines[-2].include? '100/100' }
+    tmux.send_keys '55'
+    tmux.until { |lines| lines[-2].include? '1/100' }
+    tmux.send_keys 'z'
+    assert_equal ['55', 'z', '55'], readonce.split($/)
+  end
+
   def test_expect_print_query_select_1
     tmux.send_keys "seq 1 100 | #{fzf '-q55 -1 --expect=alt-z --print-query'}", :Enter
     assert_equal ['55', '', '55'], readonce.split($/)
@@ -517,162 +528,91 @@ class TestGoFZF < TestBase
     assert_equal input, `#{FZF} -f"!z" -x --tiebreak end < #{tempname}`.split($/)
   end
 
-  # Since 0.11.2
-  def test_tiebreak_list
-    input = %w[
-      f-o-o-b-a-r
-      foobar----
-      --foobar
-      ----foobar
-      foobar--
-      --foobar--
-      foobar
+  def test_tiebreak_index_begin
+    writelines tempname, [
+      'xoxxxxxoxx',
+      'xoxxxxxox',
+      'xxoxxxoxx',
+      'xxxoxoxxx',
+      'xxxxoxox',
+      '  xxoxoxxx',
     ]
-    writelines tempname, input
 
-    assert_equal %w[
-      foobar----
-      --foobar
-      ----foobar
-      foobar--
-      --foobar--
-      foobar
-      f-o-o-b-a-r
-    ], `#{FZF} -ffb --tiebreak=index < #{tempname}`.split($/)
+    assert_equal [
+      'xxxxoxox',
+      '  xxoxoxxx',
+      'xxxoxoxxx',
+      'xxoxxxoxx',
+      'xoxxxxxox',
+      'xoxxxxxoxx',
+    ], `#{FZF} -foo < #{tempname}`.split($/)
 
-    by_length = %w[
-      foobar
-      --foobar
-      foobar--
-      foobar----
-      ----foobar
-      --foobar--
-      f-o-o-b-a-r
-    ]
-    assert_equal by_length, `#{FZF} -ffb < #{tempname}`.split($/)
-    assert_equal by_length, `#{FZF} -ffb --tiebreak=length < #{tempname}`.split($/)
+    assert_equal [
+      'xxxoxoxxx',
+      'xxxxoxox',
+      '  xxoxoxxx',
+      'xxoxxxoxx',
+      'xoxxxxxoxx',
+      'xoxxxxxox',
+    ], `#{FZF} -foo --tiebreak=index < #{tempname}`.split($/)
 
-    assert_equal %w[
-      foobar
-      foobar--
-      --foobar
-      foobar----
-      --foobar--
-      ----foobar
-      f-o-o-b-a-r
-    ], `#{FZF} -ffb --tiebreak=length,begin < #{tempname}`.split($/)
+    # Note that --tiebreak=begin is now based on the first occurrence of the
+    # first character on the pattern
+    assert_equal [
+      '  xxoxoxxx',
+      'xxxoxoxxx',
+      'xxxxoxox',
+      'xxoxxxoxx',
+      'xoxxxxxoxx',
+      'xoxxxxxox',
+    ], `#{FZF} -foo --tiebreak=begin < #{tempname}`.split($/)
 
-    assert_equal %w[
-      foobar
-      --foobar
-      foobar--
-      ----foobar
-      --foobar--
-      foobar----
-      f-o-o-b-a-r
-    ], `#{FZF} -ffb --tiebreak=length,end < #{tempname}`.split($/)
-
-    assert_equal %w[
-      foobar----
-      foobar--
-      foobar
-      --foobar
-      --foobar--
-      ----foobar
-      f-o-o-b-a-r
-    ], `#{FZF} -ffb --tiebreak=begin < #{tempname}`.split($/)
-
-    by_begin_end = %w[
-      foobar
-      foobar--
-      foobar----
-      --foobar
-      --foobar--
-      ----foobar
-      f-o-o-b-a-r
-    ]
-    assert_equal by_begin_end, `#{FZF} -ffb --tiebreak=begin,length < #{tempname}`.split($/)
-    assert_equal by_begin_end, `#{FZF} -ffb --tiebreak=begin,end < #{tempname}`.split($/)
-
-    assert_equal %w[
-      --foobar
-      ----foobar
-      foobar
-      foobar--
-      --foobar--
-      foobar----
-      f-o-o-b-a-r
-    ], `#{FZF} -ffb --tiebreak=end < #{tempname}`.split($/)
-
-    by_begin_end = %w[
-      foobar
-      --foobar
-      ----foobar
-      foobar--
-      --foobar--
-      foobar----
-      f-o-o-b-a-r
-    ]
-    assert_equal by_begin_end, `#{FZF} -ffb --tiebreak=end,begin < #{tempname}`.split($/)
-    assert_equal by_begin_end, `#{FZF} -ffb --tiebreak=end,length < #{tempname}`.split($/)
+    assert_equal [
+      '  xxoxoxxx',
+      'xxxoxoxxx',
+      'xxxxoxox',
+      'xxoxxxoxx',
+      'xoxxxxxox',
+      'xoxxxxxoxx',
+    ], `#{FZF} -foo --tiebreak=begin,length < #{tempname}`.split($/)
   end
 
-  def test_tiebreak_white_prefix
+  def test_tiebreak_end
     writelines tempname, [
-      'f o o b a r',
-      '    foo bar',
-      '    foobar',
-      '----foo bar',
-      '----foobar',
-      '  foo bar',
-      '  foobar--',
-      '  foobar',
-      '--foo bar',
-      '--foobar',
-      'foobar',
+      'xoxxxxxxxx',
+      'xxoxxxxxxx',
+      'xxxoxxxxxx',
+      'xxxxoxxxx',
+      'xxxxxoxxx',
+      '  xxxxoxxx',
     ]
 
     assert_equal [
-      '    foobar',
-      '  foobar',
-      'foobar',
-      '  foobar--',
-      '--foobar',
-      '----foobar',
-      '    foo bar',
-      '  foo bar',
-      '--foo bar',
-      '----foo bar',
-      'f o o b a r',
-    ], `#{FZF} -ffb < #{tempname}`.split($/)
+      '  xxxxoxxx',
+      'xxxxoxxxx',
+      'xxxxxoxxx',
+      'xoxxxxxxxx',
+      'xxoxxxxxxx',
+      'xxxoxxxxxx',
+    ], `#{FZF} -fo < #{tempname}`.split($/)
 
     assert_equal [
-      '    foobar',
-      '  foobar--',
-      '  foobar',
-      'foobar',
-      '--foobar',
-      '----foobar',
-      '    foo bar',
-      '  foo bar',
-      '--foo bar',
-      '----foo bar',
-      'f o o b a r',
-    ], `#{FZF} -ffb --tiebreak=begin < #{tempname}`.split($/)
+      'xxxxxoxxx',
+      '  xxxxoxxx',
+      'xxxxoxxxx',
+      'xxxoxxxxxx',
+      'xxoxxxxxxx',
+      'xoxxxxxxxx',
+    ], `#{FZF} -fo --tiebreak=end < #{tempname}`.split($/)
 
     assert_equal [
-      '    foobar',
-      '  foobar',
-      'foobar',
-      '  foobar--',
-      '--foobar',
-      '----foobar',
-      '    foo bar',
-      '  foo bar',
-      '--foo bar',
-      '----foo bar',
-      'f o o b a r',
-    ], `#{FZF} -ffb --tiebreak=begin,length < #{tempname}`.split($/)
+      'xxxxxoxxx',
+      '  xxxxoxxx',
+      'xxxxoxxxx',
+      'xxxoxxxxxx',
+      'xxoxxxxxxx',
+      'xoxxxxxxxx',
+    ], `#{FZF} -fo --tiebreak=end,length,begin < #{tempname}`.split($/)
   end
 
   def test_tiebreak_length_with_nth
@@ -746,17 +686,6 @@ class TestGoFZF < TestBase
     ]
     assert_equal output, `#{FZF} -fi -n2 < #{tempname}`.split($/)
     assert_equal output, `#{FZF} -fi -n2,1..2 < #{tempname}`.split($/)
-  end
-
-  def test_tiebreak_end_backward_scan
-    input = %w[
-      foobar-fb
-      fubar
-    ]
-    writelines tempname, input
-
-    assert_equal input.reverse, `#{FZF} -f fb < #{tempname}`.split($/)
-    assert_equal input, `#{FZF} -f fb --tiebreak=end < #{tempname}`.split($/)
   end
 
   def test_invalid_cache
@@ -1129,7 +1058,7 @@ class TestGoFZF < TestBase
   def test_invalid_term
     lines = `TERM=xxx #{FZF}`
     assert_equal 2, $?.exitstatus
-    assert lines.include?('Invalid $TERM: xxx')
+    assert lines.include?('Invalid $TERM: xxx') || lines.include?('terminal entry not found')
   end
 
   def test_invalid_option
@@ -1324,24 +1253,29 @@ module TestShell
     tmux.send_keys 'cat ', 'C-t', pane: 0
     tmux.until(1) { |lines| lines.item_count >= 1 }
     tmux.send_keys 'fzf-unicode', pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  2/' }
+    redraw = ->() { tmux.send_keys 'C-l', pane: 1 }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *2/) }
 
     tmux.send_keys '1', pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  1/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *1/) }
     tmux.send_keys :BTab, pane: 1
-    tmux.until(1) { |lines| lines[-2].include? '(1)' }
+    tmux.until(1) { |lines| redraw.(); lines[-2].include? '(1)' }
 
     tmux.send_keys :BSpace, pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  2/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *2/) }
 
     tmux.send_keys '2', pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  1/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *1/) }
     tmux.send_keys :BTab, pane: 1
-    tmux.until(1) { |lines| lines[-2].include? '(2)' }
+    tmux.until(1) { |lines| redraw.(); lines[-2].include? '(2)' }
 
     tmux.send_keys :Enter, pane: 1
-    tmux.until { |lines| lines[-1].include?('cat') || lines[-2].include?('cat') }
-    tmux.until { |lines| lines[-1].include?('fzf-unicode') || lines[-2].include?('fzf-unicode') }
+    tmux.until do |lines|
+      tmux.send_keys 'C-l'
+      [-1, -2].map { |offset| lines[offset] }.any? do |line|
+        line.start_with?('cat') && line.include?('fzf-unicode')
+      end
+    end
     tmux.send_keys :Enter
     tmux.until { |lines| lines[-1].include? 'test1test2' }
   end
@@ -1552,23 +1486,27 @@ module CompletionTest
     tmux.paste 'cd /tmp/fzf-test; echo -n test3 > "fzf-unicode 테스트1"; echo -n test4 > "fzf-unicode 테스트2"'
     tmux.prepare
     tmux.send_keys 'cat fzf-unicode**', :Tab, pane: 0
-    tmux.until(1) { |lines| lines[-2].start_with? '  2/' }
+    redraw = ->() { tmux.send_keys 'C-l', pane: 1 }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *2/) }
 
     tmux.send_keys '1', pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  1/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *1/) }
     tmux.send_keys :BTab, pane: 1
-    tmux.until(1) { |lines| lines[-2].include? '(1)' }
+    tmux.until(1) { |lines| redraw.(); lines[-2].include? '(1)' }
 
     tmux.send_keys :BSpace, pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  2/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *2/) }
 
     tmux.send_keys '2', pane: 1
-    tmux.until(1) { |lines| lines[-2].start_with? '  1/' }
+    tmux.until(1) { |lines| redraw.(); lines[-2] =~ %r(^ *1/) }
     tmux.send_keys :BTab, pane: 1
-    tmux.until(1) { |lines| lines[-2].include? '(2)' }
+    tmux.until(1) { |lines| redraw.(); lines[-2].include? '(2)' }
 
     tmux.send_keys :Enter, pane: 1
-    tmux.until { |lines| lines[-1].include?('cat') || lines[-2].include?('cat') }
+    tmux.until do |lines|
+      tmux.send_keys 'C-l'
+      lines[-1].include?('cat') || lines[-2].include?('cat')
+    end
     tmux.send_keys :Enter
     tmux.until { |lines| lines[-1].include? 'test3test4' }
   end

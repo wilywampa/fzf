@@ -1,18 +1,32 @@
 package util
 
-// #include <unistd.h>
-import "C"
-
 import (
 	"math"
 	"os"
-	"os/exec"
 	"time"
+
+	"github.com/junegunn/go-isatty"
 )
 
 // Max returns the largest integer
 func Max(first int, second int) int {
 	if first >= second {
+		return first
+	}
+	return second
+}
+
+// Max16 returns the largest integer
+func Max16(first int16, second int16) int16 {
+	if first >= second {
+		return first
+	}
+	return second
+}
+
+// Max32 returns the largest 32-bit integer
+func Max32(first int32, second int32) int32 {
+	if first > second {
 		return first
 	}
 	return second
@@ -29,14 +43,6 @@ func Min(first int, second int) int {
 // Min32 returns the smallest 32-bit integer
 func Min32(first int32, second int32) int32 {
 	if first <= second {
-		return first
-	}
-	return second
-}
-
-// Max32 returns the largest 32-bit integer
-func Max32(first int32, second int32) int32 {
-	if first > second {
 		return first
 	}
 	return second
@@ -87,14 +93,5 @@ func DurWithin(
 
 // IsTty returns true is stdin is a terminal
 func IsTty() bool {
-	return int(C.isatty(C.int(os.Stdin.Fd()))) != 0
-}
-
-// ExecCommand executes the given command with $SHELL
-func ExecCommand(command string) *exec.Cmd {
-	shell := os.Getenv("SHELL")
-	if len(shell) == 0 {
-		shell = "sh"
-	}
-	return exec.Command(shell, "-c", command)
+	return isatty.IsTerminal(os.Stdin.Fd())
 }

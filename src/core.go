@@ -143,27 +143,28 @@ func Run(opts *Options) {
 	}
 	patternBuilder := func(runes []rune) *Pattern {
 		return BuildPattern(
-			opts.Fuzzy, opts.Extended, opts.Case, forward, opts.Filter == nil,
-			opts.Nth, opts.Delimiter, runes)
+			opts.Fuzzy, opts.FuzzyAlgo, opts.Extended, opts.Case, forward,
+			opts.Filter == nil, opts.Nth, opts.Delimiter, runes)
 	}
 	matcher := NewMatcher(patternBuilder, sort, opts.Tac, eventBox)
 
 	// Filtering mode
 	if opts.Filter != nil {
 		if opts.PrintQuery {
-			fmt.Println(*opts.Filter)
+			opts.Printer(*opts.Filter)
 		}
 
 		pattern := patternBuilder([]rune(*opts.Filter))
 
 		found := false
 		if streamingFilter {
+			slab := util.MakeSlab(slab16Size, slab32Size)
 			reader := Reader{
 				func(runes []byte) bool {
 					item := chunkList.trans(runes, 0)
 					if item != nil {
-						if result, _ := pattern.MatchItem(item); result != nil {
-							fmt.Println(item.text.ToString())
+						if result, _, _ := pattern.MatchItem(item, false, slab); result != nil {
+							opts.Printer(item.text.ToString())
 							found = true
 						}
 					}
@@ -179,7 +180,7 @@ func Run(opts *Options) {
 				chunks:  snapshot,
 				pattern: pattern})
 			for i := 0; i < merger.Length(); i++ {
-				fmt.Println(merger.Get(i).item.AsString(opts.Ansi))
+				opts.Printer(merger.Get(i).item.AsString(opts.Ansi))
 				found = true
 			}
 		}
@@ -253,13 +254,13 @@ func Run(opts *Options) {
 							} else if val.final {
 								if opts.Exit0 && count == 0 || opts.Select1 && count == 1 {
 									if opts.PrintQuery {
-										fmt.Println(opts.Query)
+										opts.Printer(opts.Query)
 									}
 									if len(opts.Expect) > 0 {
-										fmt.Println()
+										opts.Printer("")
 									}
 									for i := 0; i < count; i++ {
-										fmt.Println(val.Get(i).item.AsString(opts.Ansi))
+										opts.Printer(val.Get(i).item.AsString(opts.Ansi))
 									}
 									if count > 0 {
 										os.Exit(exitOk)

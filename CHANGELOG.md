@@ -1,6 +1,80 @@
 CHANGELOG
 =========
 
+0.15.8
+------
+- Updated ANSI processor to handle more VT-100 escape sequences
+- Added `--no-bold` (and `--bold`) option
+- Improved escape sequence processing for WSL
+- Added support for `alt-[0-9]`, `f11`, and `f12` for `--bind` and `--expect`
+
+0.15.7
+------
+- Fixed panic when color is disabled and header lines contain ANSI colors
+
+0.15.6
+------
+- Windows binaries! (@kelleyma49)
+- Fixed the bug where header lines are cleared when preview window is toggled
+- Fixed not to display ^N and ^O on screen
+- Fixed cursor keys (or any key sequence that starts with ESC) on WSL by
+  making fzf wait for additional keystrokes after ESC for up to 100ms
+
+0.15.5
+------
+- Setting foreground color will no longer set background color to black
+    - e.g. `fzf --color fg:153`
+- `--tiebreak=end` will consider relative position instead of absolute distance
+- Updated `fzf#wrap` function to respect `g:fzf_colors`
+
+0.15.4
+------
+- Added support for range expression in preview and execute action
+    - e.g. `ls -l | fzf --preview="echo user={3} when={-4..-2}; cat {-1}" --header-lines=1`
+    - `{q}` will be replaced to the single-quoted string of the current query
+- Fixed to properly handle unicode whitespace characters
+- Display scroll indicator in preview window
+- Inverse search term will use exact matcher by default
+    - This is a breaking change, but I believe it makes much more sense. It is
+      almost impossible to predict which entries will be filtered out due to
+      a fuzzy inverse term. You can still perform inverse-fuzzy-match by
+      prepending `!'` to the term.
+
+0.15.3
+------
+- Added support for more ANSI attributes: dim, underline, blink, and reverse
+- Fixed race condition in `toggle-preview`
+
+0.15.2
+------
+- Preview window is now scrollable
+    - With mouse scroll or with bindable actions
+        - `preview-up`
+        - `preview-down`
+        - `preview-page-up`
+        - `preview-page-down`
+- Updated ANSI processor to support high intensity colors and ignore
+  some VT100-related escape sequences
+
+0.15.1
+------
+- Fixed panic when the pattern occurs after 2^15-th column
+- Fixed rendering delay when displaying extremely long lines
+
+0.15.0
+------
+- Improved fuzzy search algorithm
+    - Added `--algo=[v1|v2]` option so one can still choose the old algorithm
+      which values the search performance over the quality of the result
+- Advanced scoring criteria
+- `--read0` to read input delimited by ASCII NUL character
+- `--print0` to print output delimited by ASCII NUL character
+
+0.13.5
+------
+- Memory and performance optimization
+    - Up to 2x performance with half the amount of memory
+
 0.13.4
 ------
 - Performance optimization

@@ -8,7 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/junegunn/fzf/src/curses"
+	"github.com/junegunn/fzf/src/algo"
+	"github.com/junegunn/fzf/src/tui"
 
 	"github.com/junegunn/go-shellwords"
 )
@@ -19,6 +20,7 @@ const usage = `usage: fzf [options]
     -x, --extended        Extended-search mode
                           (enabled by default; +x or --no-extended to disable)
     -e, --exact           Enable Exact-match
+    --algo=TYPE           Fuzzy matching algorithm: [v1|v2] (default: v2)
     -i                    Case-insensitive match (default: smart-case match)
     +i                    Case-sensitive match
     -n, --nth=N[,..]      Comma-separated list of field index expressions
@@ -55,6 +57,7 @@ const usage = `usage: fzf [options]
     --ansi                Enable processing of ANSI color codes
     --tabstop=SPACES      Number of spaces for a tab character (default: 8)
     --color=COLSPEC       Base scheme (dark|light|16|bw) and/or custom colors
+    --no-bold             Do not use bold text
 
   History
     --history=FILE        History file
@@ -94,8 +97,7 @@ const (
 type criterion int
 
 const (
-	byMatchLen criterion = iota
-	byBonus
+	byScore criterion = iota
 	byLength
 	byBegin
 	byEnd
@@ -129,6 +131,7 @@ type previewOpts struct {
 // Options stores the values of command-line options
 type Options struct {
 	Fuzzy       bool
+	FuzzyAlgo   algo.Algo
 	Extended    bool
 	Case        Case
 	Nth         []Range
@@ -140,8 +143,9 @@ type Options struct {
 	Multi       bool
 	Ansi        bool
 	Mouse       bool
-	Theme       *curses.ColorTheme
+	Theme       *tui.ColorTheme
 	Black       bool
+	Bold        bool
 	Reverse     bool
 	Cycle       bool
 	Hscroll     bool
@@ -160,6 +164,7 @@ type Options struct {
 	Preview     previewOpts
 	PrintQuery  bool
 	ReadZero    bool
+	Printer     func(string)
 	Sync        bool
 	History     *History
 	Header      []string
@@ -172,6 +177,7 @@ type Options struct {
 func defaultOptions() *Options {
 	return &Options{
 		Fuzzy:       true,
+		FuzzyAlgo:   algo.FuzzyMatchV2,
 		Extended:    true,
 		Case:        CaseSmart,
 		Nth:         make([]Range, 0),
@@ -179,12 +185,13 @@ func defaultOptions() *Options {
 		Delimiter:   Delimiter{},
 		Sort:        1000,
 		Tac:         false,
-		Criteria:    []criterion{byMatchLen, byBonus, byLength},
+		Criteria:    []criterion{byScore, byLength},
 		Multi:       false,
 		Ansi:        false,
 		Mouse:       true,
-		Theme:       curses.EmptyTheme(),
+		Theme:       tui.EmptyTheme(),
 		Black:       false,
+		Bold:        true,
 		Reverse:     false,
 		Cycle:       false,
 		Hscroll:     true,
@@ -203,6 +210,7 @@ func defaultOptions() *Options {
 		Preview:     previewOpts{"", posRight, sizeSpec{50, true}, false},
 		PrintQuery:  false,
 		ReadZero:    false,
+		Printer:     func(str string) { fmt.Println(str) },
 		Sync:        false,
 		History:     nil,
 		Header:      make([]string, 0),
@@ -241,7 +249,7 @@ func nextString(args []string, i *int, message string) string {
 }
 
 func optionalNextString(args []string, i *int) string {
-	if len(args) > *i+1 {
+	if len(args) > *i+1 && !strings.HasPrefix(args[*i+1], "-") {
 		*i++
 		return args[*i]
 	}
@@ -322,6 +330,22 @@ func isAlphabet(char uint8) bool {
 	return char >= 'a' && char <= 'z'
 }
 
+func isNumeric(char uint8) bool {
+	return char >= '0' && char <= '9'
+}
+
+func parseAlgo(str string) algo.Algo {
+	switch str {
+	case "v1":
+		return algo.FuzzyMatchV1
+	case "v2":
+		return algo.FuzzyMatchV2
+	default:
+		errorExit("invalid algorithm (expected: v1 or v2)")
+	}
+	return algo.FuzzyMatchV2
+}
+
 func parseKeyChords(str string, message string) map[int]string {
 	if len(str) == 0 {
 		errorExit(message)
@@ -341,60 +365,66 @@ func parseKeyChords(str string, message string) map[int]string {
 		chord := 0
 		switch lkey {
 		case "up":
-			chord = curses.Up
+			chord = tui.Up
 		case "down":
-			chord = curses.Down
+			chord = tui.Down
 		case "left":
-			chord = curses.Left
+			chord = tui.Left
 		case "right":
-			chord = curses.Right
+			chord = tui.Right
 		case "enter", "return":
-			chord = curses.CtrlM
+			chord = tui.CtrlM
 		case "space":
-			chord = curses.AltZ + int(' ')
+			chord = tui.AltZ + int(' ')
 		case "bspace", "bs":
-			chord = curses.BSpace
+			chord = tui.BSpace
 		case "alt-enter", "alt-return":
-			chord = curses.AltEnter
+			chord = tui.AltEnter
 		case "alt-space":
-			chord = curses.AltSpace
+			chord = tui.AltSpace
 		case "alt-/":
-			chord = curses.AltSlash
+			chord = tui.AltSlash
 		case "alt-bs", "alt-bspace":
-			chord = curses.AltBS
+			chord = tui.AltBS
 		case "tab":
-			chord = curses.Tab
+			chord = tui.Tab
 		case "btab", "shift-tab":
-			chord = curses.BTab
+			chord = tui.BTab
 		case "esc":
-			chord = curses.ESC
+			chord = tui.ESC
 		case "del":
-			chord = curses.Del
+			chord = tui.Del
 		case "home":
-			chord = curses.Home
+			chord = tui.Home
 		case "end":
-			chord = curses.End
+			chord = tui.End
 		case "pgup", "page-up":
-			chord = curses.PgUp
+			chord = tui.PgUp
 		case "pgdn", "page-down":
-			chord = curses.PgDn
+			chord = tui.PgDn
 		case "shift-left":
-			chord = curses.SLeft
+			chord = tui.SLeft
 		case "shift-right":
-			chord = curses.SRight
+			chord = tui.SRight
 		case "double-click":
-			chord = curses.DoubleClick
+			chord = tui.DoubleClick
 		case "f10":
-			chord = curses.F10
+			chord = tui.F10
+		case "f11":
+			chord = tui.F11
+		case "f12":
+			chord = tui.F12
 		default:
 			if len(key) == 6 && strings.HasPrefix(lkey, "ctrl-") && isAlphabet(lkey[5]) {
-				chord = curses.CtrlA + int(lkey[5]) - 'a'
+				chord = tui.CtrlA + int(lkey[5]) - 'a'
 			} else if len(key) == 5 && strings.HasPrefix(lkey, "alt-") && isAlphabet(lkey[4]) {
-				chord = curses.AltA + int(lkey[4]) - 'a'
+				chord = tui.AltA + int(lkey[4]) - 'a'
+			} else if len(key) == 5 && strings.HasPrefix(lkey, "alt-") && isNumeric(lkey[4]) {
+				chord = tui.Alt0 + int(lkey[4]) - '0'
 			} else if len(key) == 2 && strings.HasPrefix(lkey, "f") && key[1] >= '1' && key[1] <= '9' {
-				chord = curses.F1 + int(key[1]) - '1'
+				chord = tui.F1 + int(key[1]) - '1'
 			} else if utf8.RuneCountInString(key) == 1 {
-				chord = curses.AltZ + int([]rune(key)[0])
+				chord = tui.AltZ + int([]rune(key)[0])
 			} else {
 				errorExit("unsupported key: " + key)
 			}
@@ -407,7 +437,7 @@ func parseKeyChords(str string, message string) map[int]string {
 }
 
 func parseTiebreak(str string) []criterion {
-	criteria := []criterion{byMatchLen, byBonus}
+	criteria := []criterion{byScore}
 	hasIndex := false
 	hasLength := false
 	hasBegin := false
@@ -441,7 +471,7 @@ func parseTiebreak(str string) []criterion {
 	return criteria
 }
 
-func dupeTheme(theme *curses.ColorTheme) *curses.ColorTheme {
+func dupeTheme(theme *tui.ColorTheme) *tui.ColorTheme {
 	if theme != nil {
 		dupe := *theme
 		return &dupe
@@ -449,16 +479,16 @@ func dupeTheme(theme *curses.ColorTheme) *curses.ColorTheme {
 	return nil
 }
 
-func parseTheme(defaultTheme *curses.ColorTheme, str string) *curses.ColorTheme {
+func parseTheme(defaultTheme *tui.ColorTheme, str string) *tui.ColorTheme {
 	theme := dupeTheme(defaultTheme)
 	for _, str := range strings.Split(strings.ToLower(str), ",") {
 		switch str {
 		case "dark":
-			theme = dupeTheme(curses.Dark256)
+			theme = dupeTheme(tui.Dark256)
 		case "light":
-			theme = dupeTheme(curses.Light256)
+			theme = dupeTheme(tui.Light256)
 		case "16":
-			theme = dupeTheme(curses.Default16)
+			theme = dupeTheme(tui.Default16)
 		case "bw", "no":
 			theme = nil
 		default:
@@ -478,14 +508,12 @@ func parseTheme(defaultTheme *curses.ColorTheme, str string) *curses.ColorTheme 
 			if err != nil || ansi32 < -1 || ansi32 > 255 {
 				fail()
 			}
-			ansi := int16(ansi32)
+			ansi := tui.Color(ansi32)
 			switch pair[0] {
 			case "fg":
 				theme.Fg = ansi
-				theme.UseDefault = theme.UseDefault && ansi < 0
 			case "bg":
 				theme.Bg = ansi
-				theme.UseDefault = theme.UseDefault && ansi < 0
 			case "fg+":
 				theme.Current = ansi
 			case "bg+":
@@ -557,9 +585,9 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 		}
 		var key int
 		if len(pair[0]) == 1 && pair[0][0] == escapedColon {
-			key = ':' + curses.AltZ
+			key = ':' + tui.AltZ
 		} else if len(pair[0]) == 1 && pair[0][0] == escapedComma {
-			key = ',' + curses.AltZ
+			key = ',' + tui.AltZ
 		} else {
 			keys := parseKeyChords(pair[0], "key name required")
 			key = firstKey(keys)
@@ -646,6 +674,14 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 			keymap[key] = actTogglePreview
 		case "toggle-sort":
 			keymap[key] = actToggleSort
+		case "preview-up":
+			keymap[key] = actPreviewUp
+		case "preview-down":
+			keymap[key] = actPreviewDown
+		case "preview-page-up":
+			keymap[key] = actPreviewPageUp
+		case "preview-page-down":
+			keymap[key] = actPreviewPageDown
 		default:
 			if isExecuteAction(actLower) {
 				var offset int
@@ -834,6 +870,8 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "-f", "--filter":
 			filter := nextString(allArgs, &i, "query string required")
 			opts.Filter = &filter
+		case "--algo":
+			opts.FuzzyAlgo = parseAlgo(nextString(allArgs, &i, "algorithm required (v1|v2)"))
 		case "--expect":
 			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required")
 		case "--tiebreak":
@@ -843,7 +881,7 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "--color":
 			spec := optionalNextString(allArgs, &i)
 			if len(spec) == 0 {
-				opts.Theme = curses.EmptyTheme()
+				opts.Theme = tui.EmptyTheme()
 			} else {
 				opts.Theme = parseTheme(opts.Theme, spec)
 			}
@@ -880,11 +918,15 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "+c", "--no-color":
 			opts.Theme = nil
 		case "+2", "--no-256":
-			opts.Theme = curses.Default16
+			opts.Theme = tui.Default16
 		case "--black":
 			opts.Black = true
 		case "--no-black":
 			opts.Black = false
+		case "--bold":
+			opts.Bold = true
+		case "--no-bold":
+			opts.Bold = false
 		case "--reverse":
 			opts.Reverse = true
 		case "--no-reverse":
@@ -918,6 +960,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.ReadZero = true
 		case "--no-read0":
 			opts.ReadZero = false
+		case "--print0":
+			opts.Printer = func(str string) { fmt.Print(str, "\x00") }
+		case "--no-print0":
+			opts.Printer = func(str string) { fmt.Println(str) }
 		case "--print-query":
 			opts.PrintQuery = true
 		case "--no-print-query":
@@ -962,7 +1008,9 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "--version":
 			opts.Version = true
 		default:
-			if match, value := optString(arg, "-q", "--query="); match {
+			if match, value := optString(arg, "--algo="); match {
+				opts.FuzzyAlgo = parseAlgo(value)
+			} else if match, value := optString(arg, "-q", "--query="); match {
 				opts.Query = value
 			} else if match, value := optString(arg, "-f", "--filter="); match {
 				opts.Filter = &value
@@ -1040,11 +1088,11 @@ func parseOptions(opts *Options, allArgs []string) {
 func postProcessOptions(opts *Options) {
 	// Default actions for CTRL-N / CTRL-P when --history is set
 	if opts.History != nil {
-		if _, prs := opts.Keymap[curses.CtrlP]; !prs {
-			opts.Keymap[curses.CtrlP] = actPreviousHistory
+		if _, prs := opts.Keymap[tui.CtrlP]; !prs {
+			opts.Keymap[tui.CtrlP] = actPreviousHistory
 		}
-		if _, prs := opts.Keymap[curses.CtrlN]; !prs {
-			opts.Keymap[curses.CtrlN] = actNextHistory
+		if _, prs := opts.Keymap[tui.CtrlN]; !prs {
+			opts.Keymap[tui.CtrlN] = actNextHistory
 		}
 	}
 

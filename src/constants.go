@@ -8,26 +8,32 @@ import (
 
 const (
 	// Current version
-	version = "0.13.4"
+	version = "0.15.8"
 
 	// Core
 	coordinatorDelayMax  time.Duration = 100 * time.Millisecond
 	coordinatorDelayStep time.Duration = 10 * time.Millisecond
 
 	// Reader
-	defaultCommand   = `find . -path '*/\.*' -prune -o -type f -print -o -type l -print 2> /dev/null | sed s/^..//`
 	readerBufferSize = 64 * 1024
 
 	// Terminal
-	initialDelay    = 20 * time.Millisecond
-	initialDelayTac = 100 * time.Millisecond
-	spinnerDuration = 200 * time.Millisecond
+	initialDelay     = 20 * time.Millisecond
+	initialDelayTac  = 100 * time.Millisecond
+	spinnerDuration  = 200 * time.Millisecond
+	maxPatternLength = 100
 
 	// Matcher
-	progressMinDuration = 200 * time.Millisecond
+	numPartitionsMultiplier = 8
+	maxPartitions           = 32
+	progressMinDuration     = 200 * time.Millisecond
 
 	// Capacity of each chunk
 	chunkSize int = 100
+
+	// Pre-allocated memory slices to minimize GC
+	slab16Size int = 100 * 1024 // 200KB * 32 = 12.8MB
+	slab32Size int = 2048       // 8KB * 32 = 256KB
 
 	// Do not cache results of low selectivity queries
 	queryCacheMax int = chunkSize / 5

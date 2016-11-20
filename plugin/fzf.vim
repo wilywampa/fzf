@@ -21,6 +21,11 @@
 " OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 " WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+if exists('g:loaded_fzf')
+  finish
+endif
+let g:loaded_fzf = 1
+
 let s:default_layout = { 'down': '~40%' }
 let s:layout_keys = ['window', 'up', 'down', 'left', 'right']
 let s:fzf_go = expand('<sfile>:h:h').'/bin/fzf'
@@ -154,6 +159,22 @@ function! s:common_sink(action, lines) abort
   endtry
 endfunction
 
+function! s:get_color(attr, ...)
+  for group in a:000
+    let code = synIDattr(synIDtrans(hlID(group)), a:attr, 'cterm')
+    if code =~ '^[0-9]\+$'
+      return code
+    endif
+  endfor
+  return ''
+endfunction
+
+function! s:defaults()
+  let rules = copy(get(g:, 'fzf_colors', {}))
+  let colors = join(map(items(filter(map(rules, 'call("s:get_color", v:val)'), '!empty(v:val)')), 'join(v:val, ":")'), ',')
+  return empty(colors) ? '' : ('--color='.colors)
+endfunction
+
 " [name string,] [opts dict,] [fullscreen boolean]
 function! fzf#wrap(...)
   let args = ['', {}, 0]
@@ -185,8 +206,10 @@ function! fzf#wrap(...)
     endif
   endif
 
+  " Colors: g:fzf_colors
+  let opts.options = s:defaults() .' '. get(opts, 'options', '')
+
   " History: g:fzf_history_dir
-  let opts.options = get(opts, 'options', '')
   if len(name) && len(get(g:, 'fzf_history_dir', ''))
     let dir = expand(g:fzf_history_dir)
     if !isdirectory(dir)
@@ -276,10 +299,10 @@ function! s:fzf_tmux(dict)
     if s:present(a:dict, o)
       let spec = a:dict[o]
       if (o == 'up' || o == 'down') && spec[0] == '~'
-        let size = '-'.o[0].s:calc_size(&lines, spec[1:], a:dict)
+        let size = '-'.o[0].s:calc_size(&lines, spec, a:dict)
       else
         " Legacy boolean option
-        let size = '-'.o[0].(spec == 1 ? '' : spec)
+        let size = '-'.o[0].(spec == 1 ? '' : substitute(spec, '^\~', '', ''))
       endif
       break
     endif
@@ -289,7 +312,8 @@ function! s:fzf_tmux(dict)
 endfunction
 
 function! s:splittable(dict)
-  return s:present(a:dict, 'up', 'down', 'left', 'right')
+  return s:present(a:dict, 'up', 'down') && &lines > 15 ||
+        \ s:present(a:dict, 'left', 'right') && &columns > 40
 endfunction
 
 function! s:pushd(dict)
@@ -375,10 +399,11 @@ function! s:execute_tmux(dict, command, temps) abort
 endfunction
 
 function! s:calc_size(max, val, dict)
-  if a:val =~ '%$'
-    let size = a:max * str2nr(a:val[:-2]) / 100
+  let val = substitute(a:val, '^\~', '', '')
+  if val =~ '%$'
+    let size = a:max * str2nr(val[:-2]) / 100
   else
-    let size = min([a:max, str2nr(a:val)])
+    let size = min([a:max, str2nr(val)])
   endif
 
   let srcsz = -1
@@ -404,24 +429,25 @@ function! s:split(dict)
   \ 'right': ['vertical botright', 'vertical resize', &columns] }
   let ppos = s:getpos()
   try
-    for [dir, triple] in items(directions)
-      let val = get(a:dict, dir, '')
-      if !empty(val)
-        let [cmd, resz, max] = triple
-        if (dir == 'up' || dir == 'down') && val[0] == '~'
-          let sz = s:calc_size(max, val[1:], a:dict)
-        else
-          let sz = s:calc_size(max, val, {})
-        endif
-        execute cmd sz.'new'
-        execute resz sz
-        return [ppos, {}]
-      endif
-    endfor
     if s:present(a:dict, 'window')
       execute a:dict.window
-    else
+    elseif !s:splittable(a:dict)
       execute (tabpagenr()-1).'tabnew'
+    else
+      for [dir, triple] in items(directions)
+        let val = get(a:dict, dir, '')
+        if !empty(val)
+          let [cmd, resz, max] = triple
+          if (dir == 'up' || dir == 'down') && val[0] == '~'
+            let sz = s:calc_size(max, val, a:dict)
+          else
+            let sz = s:calc_size(max, val, {})
+          endif
+          execute cmd sz.'new'
+          execute resz sz
+          return [ppos, {}]
+        endif
+      endfor
     endif
     return [ppos, { '&l:wfw': &l:wfw, '&l:wfh': &l:wfh }]
   finally
@@ -430,9 +456,11 @@ function! s:split(dict)
 endfunction
 
 function! s:execute_term(dict, command, temps) abort
+  let winrest = winrestcmd()
   let [ppos, winopts] = s:split(a:dict)
   let fzf = { 'buf': bufnr('%'), 'ppos': ppos, 'dict': a:dict, 'temps': a:temps,
-            \ 'winopts': winopts, 'command': a:command }
+            \ 'winopts': winopts, 'winrest': winrest, 'lines': &lines,
+            \ 'columns': &columns, 'command': a:command }
   function! fzf.switch_back(inplace)
     if a:inplace && bufnr('') == self.buf
       " FIXME: Can't re-enter normal mode from terminal mode
@@ -462,6 +490,10 @@ function! s:execute_term(dict, command, temps) abort
 
     if bufexists(self.buf)
       execute 'bd!' self.buf
+    endif
+
+    if &lines == self.lines && &columns == self.columns && s:getpos() == self.ppos
+      execute self.winrest
     endif
 
     if !s:exit_handler(a:code, self.command, 1)
@@ -551,13 +583,16 @@ let s:default_action = {
 
 function! s:cmd(bang, ...) abort
   let args = copy(a:000)
-  let opts = {}
+  let opts = { 'options': '--multi ' }
   if len(args) && isdirectory(expand(args[-1]))
-    let opts.dir = substitute(remove(args, -1), '\\\(["'']\)', '\1', 'g')
+    let opts.dir = substitute(substitute(remove(args, -1), '\\\(["'']\)', '\1', 'g'), '/*$', '/', '')
+    let opts.options .= ' --prompt '.shellescape(opts.dir)
   else
     let opts.dir = getcwd()
+    let opts.options .= ' --prompt '.shellescape(pathshorten(getcwd()).'/')
   endif
-  call fzf#run(fzf#wrap('FZF', extend({'options': join(args)}, opts), a:bang))
+  let opts.options .= ' '.join(args)
+  call fzf#run(fzf#wrap('FZF', opts, a:bang))
 endfunction
 
 command! -nargs=* -complete=dir -bang FZF call s:cmd(<bang>0, <f-args>)

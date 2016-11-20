@@ -3,13 +3,19 @@ package fzf
 import (
 	"fmt"
 	"testing"
+
+	"github.com/junegunn/fzf/src/tui"
 )
 
 func TestExtractColor(t *testing.T) {
-	assert := func(offset ansiOffset, b int32, e int32, fg int, bg int, bold bool) {
+	assert := func(offset ansiOffset, b int32, e int32, fg tui.Color, bg tui.Color, bold bool) {
+		var attr tui.Attr
+		if bold {
+			attr = tui.Bold
+		}
 		if offset.offset[0] != b || offset.offset[1] != e ||
-			offset.color.fg != fg || offset.color.bg != bg || offset.color.bold != bold {
-			t.Error(offset, b, e, fg, bg, bold)
+			offset.color.fg != fg || offset.color.bg != bg || offset.color.attr != attr {
+			t.Error(offset, b, e, fg, bg, attr)
 		}
 	}
 
@@ -20,7 +26,7 @@ func TestExtractColor(t *testing.T) {
 		output, ansiOffsets, newState := extractColor(src, state, nil)
 		state = newState
 		if output != "hello world" {
-			t.Errorf("Invalid output: {}", output)
+			t.Errorf("Invalid output: %s %s", output, []rune(output))
 		}
 		fmt.Println(src, ansiOffsets, clean)
 		assertion(ansiOffsets, state)
@@ -50,7 +56,7 @@ func TestExtractColor(t *testing.T) {
 	})
 
 	state = nil
-	src = "\x1b[1mhello \x1b[mworld"
+	src = "\x1b[1mhello \x1b[mw\x1b7o\x1b8r\x1b(Bl\x1b[2@d"
 	check(func(offsets *[]ansiOffset, state *ansiState) {
 		if len(*offsets) != 1 {
 			t.Fail()
@@ -121,7 +127,7 @@ func TestExtractColor(t *testing.T) {
 		if len(*offsets) != 1 {
 			t.Fail()
 		}
-		if state.fg != 2 || state.bg != -1 || !state.bold {
+		if state.fg != 2 || state.bg != -1 || state.attr == 0 {
 			t.Fail()
 		}
 		assert((*offsets)[0], 6, 11, 2, -1, true)
@@ -132,7 +138,7 @@ func TestExtractColor(t *testing.T) {
 		if len(*offsets) != 1 {
 			t.Fail()
 		}
-		if state.fg != 2 || state.bg != -1 || !state.bold {
+		if state.fg != 2 || state.bg != -1 || state.attr == 0 {
 			t.Fail()
 		}
 		assert((*offsets)[0], 0, 11, 2, -1, true)
@@ -143,7 +149,7 @@ func TestExtractColor(t *testing.T) {
 		if len(*offsets) != 2 {
 			t.Fail()
 		}
-		if state.fg != 200 || state.bg != 100 || state.bold {
+		if state.fg != 200 || state.bg != 100 || state.attr > 0 {
 			t.Fail()
 		}
 		assert((*offsets)[0], 0, 6, 2, -1, true)

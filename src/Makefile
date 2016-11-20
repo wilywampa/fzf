@@ -33,17 +33,24 @@ endif
 
 all: fzf/$(BINARY)
 
+ifeq ($(GOOS),windows)
+release: fzf/$(BINARY32) fzf/$(BINARY64)
+	-cd fzf && cp $(BINARY32) $(RELEASE32).exe && zip $(RELEASE32).zip $(RELEASE32).exe
+	cd fzf && cp $(BINARY64) $(RELEASE64).exe && zip $(RELEASE64).zip $(RELEASE64).exe && \
+	rm -f $(RELEASE32).exe $(RELEASE64).exe
+else
 release: test fzf/$(BINARY32) fzf/$(BINARY64)
 	-cd fzf && cp $(BINARY32) $(RELEASE32) && tar -czf $(RELEASE32).tgz $(RELEASE32)
 	cd fzf && cp $(BINARY64) $(RELEASE64) && tar -czf $(RELEASE64).tgz $(RELEASE64) && \
 	rm -f $(RELEASE32) $(RELEASE64)
+endif
 
 $(SRCDIR):
 	mkdir -p $(shell dirname $(SRCDIR))
 	ln -s $(ROOTDIR) $(SRCDIR)
 
 deps: $(SRCDIR) $(SOURCES)
-	cd $(SRCDIR) && go get
+	cd $(SRCDIR) && go get -tags "$(TAGS)"
 
 android-build: $(SRCDIR)
 	cd $(SRCDIR) && GOARCH=arm GOARM=7 CGO_ENABLED=1 go get
@@ -52,7 +59,7 @@ android-build: $(SRCDIR)
 	rm -f $(RELEASEARM7)
 
 test: deps
-	SHELL=/bin/sh go test -v ./...
+	SHELL=/bin/sh GOOS=$(GOOS) go test -v -tags "$(TAGS)" ./...
 
 install: $(BINDIR)/fzf
 
