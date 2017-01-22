@@ -50,16 +50,7 @@ starts much faster though the difference may not be noticeable.
 Build
 -----
 
-```sh
-# Build fzf executables and tarballs
-make release
-
-# Install the executable to ../bin directory
-make install
-
-# Build executables and tarballs for Linux using Docker
-make linux
-```
+See [BUILD.md](../BUILD.md)
 
 Test
 ----
@@ -88,6 +79,8 @@ Third-party libraries used
     - Licensed under [MIT](http://mattn.mit-license.org)
 - [mattn/go-isatty](https://github.com/mattn/go-isatty)
     - Licensed under [MIT](http://mattn.mit-license.org)
+- [tcell](https://github.com/gdamore/tcell)
+    - Licensed under [Apache License 2.0](https://github.com/gdamore/tcell/blob/master/LICENSE)
 
 License
 -------
@@ -99,4 +92,4 @@ License
 [gil]:     http://en.wikipedia.org/wiki/Global_Interpreter_Lock
 [ncurses]: https://www.gnu.org/software/ncurses/
 [req]:     http://golang.org/doc/install
-[termbox]: https://github.com/nsf/termbox-go
+[tcell]:   https://github.com/gdamore/tcell

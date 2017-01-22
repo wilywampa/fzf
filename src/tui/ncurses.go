@@ -17,20 +17,54 @@ FILE* c_tty() {
 SCREEN* c_newterm(FILE* tty) {
 	return newterm(NULL, stderr, tty);
 }
+
+int c_getcurx(WINDOW* win) {
+	return getcurx(win);
+}
 */
 import "C"
 
 import (
-	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-type ColorPair int16
-type Attr C.int
-type WindowImpl C.WINDOW
+type Attr C.uint
+
+type CursesWindow struct {
+	impl   *C.WINDOW
+	top    int
+	left   int
+	width  int
+	height int
+}
+
+func (w *CursesWindow) Top() int {
+	return w.top
+}
+
+func (w *CursesWindow) Left() int {
+	return w.left
+}
+
+func (w *CursesWindow) Width() int {
+	return w.width
+}
+
+func (w *CursesWindow) Height() int {
+	return w.height
+}
+
+func (w *CursesWindow) Refresh() {
+	C.wnoutrefresh(w.impl)
+}
+
+func (w *CursesWindow) FinishFill() {
+	// NO-OP
+}
 
 const (
 	Bold      Attr = C.A_BOLD
@@ -40,62 +74,48 @@ const (
 	Underline      = C.A_UNDERLINE
 )
 
+var Italic Attr = C.A_VERTICAL << 1 // FIXME
+
 const (
 	AttrRegular Attr = 0
 )
 
-// Pallete
-const (
-	ColDefault ColorPair = iota
-	ColNormal
-	ColPrompt
-	ColMatch
-	ColCurrent
-	ColCurrentMatch
-	ColSpinner
-	ColInfo
-	ColCursor
-	ColSelected
-	ColHeader
-	ColBorder
-	ColUser // Should be the last entry
-)
-
 var (
 	_screen   *C.SCREEN
-	_colorMap map[int]ColorPair
-	_colorFn  func(ColorPair, Attr) C.int
+	_colorMap map[int]int16
+	_colorFn  func(ColorPair, Attr) (C.short, C.int)
 )
 
 func init() {
-	_colorMap = make(map[int]ColorPair)
+	_colorMap = make(map[int]int16)
+	if strings.HasPrefix(C.GoString(C.curses_version()), "ncurses 5") {
+		Italic = C.A_NORMAL
+	}
 }
 
 func (a Attr) Merge(b Attr) Attr {
 	return a | b
 }
 
-func DefaultTheme() *ColorTheme {
+func (r *FullscreenRenderer) defaultTheme() *ColorTheme {
 	if C.tigetnum(C.CString("colors")) >= 256 {
 		return Dark256
 	}
 	return Default16
 }
 
-func Init(theme *ColorTheme, black bool, mouse bool) {
+func (r *FullscreenRenderer) Init() {
 	C.setlocale(C.LC_ALL, C.CString(""))
 	tty := C.c_tty()
 	if tty == nil {
-		fmt.Println("Failed to open /dev/tty")
-		os.Exit(2)
+		errorExit("Failed to open /dev/tty")
 	}
 	_screen = C.c_newterm(tty)
 	if _screen == nil {
-		fmt.Println("Invalid $TERM: " + os.Getenv("TERM"))
-		os.Exit(2)
+		errorExit("Invalid $TERM: " + os.Getenv("TERM"))
 	}
 	C.set_term(_screen)
-	if mouse {
+	if r.mouse {
 		C.mousemask(C.ALL_MOUSE_EVENTS, nil)
 		C.mouseinterval(0)
 	}
@@ -103,128 +123,125 @@ func Init(theme *ColorTheme, black bool, mouse bool) {
 	C.raw() // stty dsusp undef
 	C.nonl()
 	C.keypad(C.stdscr, true)
-	C.set_escdelay(100)
-	C.timeout(100) // ESCDELAY 100ms + timeout 100ms
 
-	_color = theme != nil
-	if _color {
+	delay := 50
+	delayEnv := os.Getenv("ESCDELAY")
+	if len(delayEnv) > 0 {
+		num, err := strconv.Atoi(delayEnv)
+		if err == nil && num >= 0 {
+			delay = num
+		}
+	}
+	C.set_escdelay(C.int(delay))
+
+	if r.theme != nil {
 		C.start_color()
-		InitTheme(theme, black)
-		initPairs(theme)
-		C.bkgd(C.chtype(C.COLOR_PAIR(C.int(ColNormal))))
+		initTheme(r.theme, r.defaultTheme(), r.forceBlack)
+		initPairs(r.theme)
+		C.bkgd(C.chtype(C.COLOR_PAIR(C.int(ColNormal.index()))))
 		_colorFn = attrColored
 	} else {
+		initTheme(r.theme, nil, r.forceBlack)
 		_colorFn = attrMono
 	}
+
+	C.nodelay(C.stdscr, true)
+	ch := C.getch()
+	if ch != C.ERR {
+		C.ungetch(ch)
+	}
+	C.nodelay(C.stdscr, false)
 }
 
 func initPairs(theme *ColorTheme) {
 	C.assume_default_colors(C.int(theme.Fg), C.int(theme.Bg))
-	initPair := func(group ColorPair, fg Color, bg Color) {
-		C.init_pair(C.short(group), C.short(fg), C.short(bg))
+	for _, pair := range []ColorPair{
+		ColNormal,
+		ColPrompt,
+		ColMatch,
+		ColCurrent,
+		ColCurrentMatch,
+		ColSpinner,
+		ColInfo,
+		ColCursor,
+		ColSelected,
+		ColHeader,
+		ColBorder} {
+		C.init_pair(C.short(pair.index()), C.short(pair.Fg()), C.short(pair.Bg()))
 	}
-	initPair(ColNormal, theme.Fg, theme.Bg)
-	initPair(ColPrompt, theme.Prompt, theme.Bg)
-	initPair(ColMatch, theme.Match, theme.Bg)
-	initPair(ColCurrent, theme.Current, theme.DarkBg)
-	initPair(ColCurrentMatch, theme.CurrentMatch, theme.DarkBg)
-	initPair(ColSpinner, theme.Spinner, theme.Bg)
-	initPair(ColInfo, theme.Info, theme.Bg)
-	initPair(ColCursor, theme.Cursor, theme.DarkBg)
-	initPair(ColSelected, theme.Selected, theme.DarkBg)
-	initPair(ColHeader, theme.Header, theme.Bg)
-	initPair(ColBorder, theme.Border, theme.Bg)
 }
 
-func Pause() {
+func (r *FullscreenRenderer) Pause() {
 	C.endwin()
 }
 
-func Resume() bool {
+func (r *FullscreenRenderer) Resume() bool {
 	return false
 }
 
-func Close() {
+func (r *FullscreenRenderer) Close() {
 	C.endwin()
 	C.delscreen(_screen)
 }
 
-func NewWindow(top int, left int, width int, height int, border bool) *Window {
+func (r *FullscreenRenderer) NewWindow(top int, left int, width int, height int, border bool) Window {
 	win := C.newwin(C.int(height), C.int(width), C.int(top), C.int(left))
-	if _color {
-		C.wbkgd(win, C.chtype(C.COLOR_PAIR(C.int(ColNormal))))
+	if r.theme != nil {
+		C.wbkgd(win, C.chtype(C.COLOR_PAIR(C.int(ColNormal.index()))))
 	}
 	if border {
-		attr := _colorFn(ColBorder, 0)
+		pair, attr := _colorFn(ColBorder, 0)
+		C.wcolor_set(win, pair, nil)
 		C.wattron(win, attr)
 		C.box(win, 0, 0)
 		C.wattroff(win, attr)
+		C.wcolor_set(win, 0, nil)
 	}
 
-	return &Window{
-		impl:   (*WindowImpl)(win),
-		Top:    top,
-		Left:   left,
-		Width:  width,
-		Height: height,
+	return &CursesWindow{
+		impl:   win,
+		top:    top,
+		left:   left,
+		width:  width,
+		height: height,
 	}
 }
 
-func attrColored(pair ColorPair, a Attr) C.int {
-	var attr C.int
-	if pair > 0 {
-		attr = C.COLOR_PAIR(C.int(pair))
-	}
-	return attr | C.int(a)
+func attrColored(color ColorPair, a Attr) (C.short, C.int) {
+	return C.short(color.index()), C.int(a)
 }
 
-func attrMono(pair ColorPair, a Attr) C.int {
-	var attr C.int
-	switch pair {
-	case ColCurrent:
-		attr = C.A_REVERSE
-	case ColMatch:
-		attr = C.A_UNDERLINE
-	case ColCurrentMatch:
-		attr = C.A_UNDERLINE | C.A_REVERSE
-	}
-	if C.int(a)&C.A_BOLD == C.A_BOLD {
-		attr = attr | C.A_BOLD
-	}
-	return attr
+func attrMono(color ColorPair, a Attr) (C.short, C.int) {
+	return 0, C.int(attrFor(color, a))
 }
 
-func MaxX() int {
+func (r *FullscreenRenderer) MaxX() int {
 	return int(C.COLS)
 }
 
-func MaxY() int {
+func (r *FullscreenRenderer) MaxY() int {
 	return int(C.LINES)
 }
 
-func (w *Window) win() *C.WINDOW {
-	return (*C.WINDOW)(w.impl)
+func (w *CursesWindow) Close() {
+	C.delwin(w.impl)
 }
 
-func (w *Window) Close() {
-	C.delwin(w.win())
+func (w *CursesWindow) Enclose(y int, x int) bool {
+	return bool(C.wenclose(w.impl, C.int(y), C.int(x)))
 }
 
-func (w *Window) Enclose(y int, x int) bool {
-	return bool(C.wenclose(w.win(), C.int(y), C.int(x)))
+func (w *CursesWindow) Move(y int, x int) {
+	C.wmove(w.impl, C.int(y), C.int(x))
 }
 
-func (w *Window) Move(y int, x int) {
-	C.wmove(w.win(), C.int(y), C.int(x))
-}
-
-func (w *Window) MoveAndClear(y int, x int) {
+func (w *CursesWindow) MoveAndClear(y int, x int) {
 	w.Move(y, x)
-	C.wclrtoeol(w.win())
+	C.wclrtoeol(w.impl)
 }
 
-func (w *Window) Print(text string) {
-	C.waddstr(w.win(), C.CString(strings.Map(func(r rune) rune {
+func (w *CursesWindow) Print(text string) {
+	C.waddstr(w.impl, C.CString(strings.Map(func(r rune) rune {
 		if r < 32 {
 			return -1
 		}
@@ -232,53 +249,81 @@ func (w *Window) Print(text string) {
 	}, text)))
 }
 
-func (w *Window) CPrint(pair ColorPair, a Attr, text string) {
-	attr := _colorFn(pair, a)
-	C.wattron(w.win(), attr)
+func (w *CursesWindow) CPrint(color ColorPair, attr Attr, text string) {
+	p, a := _colorFn(color, attr)
+	C.wcolor_set(w.impl, p, nil)
+	C.wattron(w.impl, a)
 	w.Print(text)
-	C.wattroff(w.win(), attr)
+	C.wattroff(w.impl, a)
+	C.wcolor_set(w.impl, 0, nil)
 }
 
-func Clear() {
+func (r *FullscreenRenderer) Clear() {
 	C.clear()
 	C.endwin()
 }
 
-func Refresh() {
+func (r *FullscreenRenderer) Refresh() {
 	C.refresh()
 }
 
-func (w *Window) Erase() {
-	C.werase(w.win())
+func (w *CursesWindow) Erase() {
+	C.werase(w.impl)
 }
 
-func (w *Window) Fill(str string) bool {
-	return C.waddstr(w.win(), C.CString(str)) == C.OK
+func (w *CursesWindow) X() int {
+	return int(C.c_getcurx(w.impl))
 }
 
-func (w *Window) CFill(str string, fg Color, bg Color, a Attr) bool {
-	attr := _colorFn(PairFor(fg, bg), a)
-	C.wattron(w.win(), attr)
+func (r *FullscreenRenderer) DoesAutoWrap() bool {
+	return true
+}
+
+func (r *FullscreenRenderer) IsOptimized() bool {
+	return true
+}
+
+func (w *CursesWindow) Fill(str string) FillReturn {
+	if C.waddstr(w.impl, C.CString(str)) == C.OK {
+		return FillContinue
+	}
+	return FillSuspend
+}
+
+func (w *CursesWindow) CFill(fg Color, bg Color, attr Attr, str string) FillReturn {
+	index := ColorPair{fg, bg, -1}.index()
+	C.wcolor_set(w.impl, C.short(index), nil)
+	C.wattron(w.impl, C.int(attr))
 	ret := w.Fill(str)
-	C.wattroff(w.win(), attr)
+	C.wattroff(w.impl, C.int(attr))
+	C.wcolor_set(w.impl, 0, nil)
 	return ret
 }
 
-func RefreshWindows(windows []*Window) {
+func (r *FullscreenRenderer) RefreshWindows(windows []Window) {
 	for _, w := range windows {
-		C.wnoutrefresh(w.win())
+		w.Refresh()
 	}
 	C.doupdate()
 }
 
-func PairFor(fg Color, bg Color) ColorPair {
-	key := (int(fg) << 8) + int(bg)
+func (p ColorPair) index() int16 {
+	if p.id >= 0 {
+		return p.id
+	}
+
+	// ncurses does not support 24-bit colors
+	if p.is24() {
+		return ColDefault.index()
+	}
+
+	key := p.key()
 	if found, prs := _colorMap[key]; prs {
 		return found
 	}
 
-	id := ColorPair(len(_colorMap) + int(ColUser))
-	C.init_pair(C.short(id), C.short(fg), C.short(bg))
+	id := int16(len(_colorMap)) + ColUser.id
+	C.init_pair(C.short(id), C.short(p.Fg()), C.short(p.Bg()))
 	_colorMap[key] = id
 	return id
 }
@@ -293,8 +338,10 @@ func consume(expects ...rune) bool {
 }
 
 func escSequence() Event {
-	// nodelay is not thread-safe (e.g. <ESC><CTRL-P>)
-	// C.nodelay(C.stdscr, true)
+	C.nodelay(C.stdscr, true)
+	defer func() {
+		C.nodelay(C.stdscr, false)
+	}()
 	c := C.getch()
 	switch c {
 	case C.ERR:
@@ -328,11 +375,13 @@ func escSequence() Event {
 	return Event{Invalid, 0, nil}
 }
 
-func GetChar() Event {
+func (r *FullscreenRenderer) GetChar() Event {
 	c := C.getch()
 	switch c {
 	case C.ERR:
-		return Event{Invalid, 0, nil}
+		// Unexpected error from blocking read
+		r.Close()
+		errorExit("Failed to read /dev/tty")
 	case C.KEY_UP:
 		return Event{Up, 0, nil}
 	case C.KEY_DOWN:
@@ -394,17 +443,17 @@ func GetChar() Event {
 			/* Cannot use BUTTON1_DOUBLE_CLICKED due to mouseinterval(0) */
 			if (me.bstate & C.BUTTON1_PRESSED) > 0 {
 				now := time.Now()
-				if now.Sub(_prevDownTime) < doubleClickDuration {
-					_clickY = append(_clickY, y)
+				if now.Sub(r.prevDownTime) < doubleClickDuration {
+					r.clickY = append(r.clickY, y)
 				} else {
-					_clickY = []int{y}
-					_prevDownTime = now
+					r.clickY = []int{y}
+					r.prevDownTime = now
 				}
 				return Event{Mouse, 0, &MouseEvent{y, x, 0, true, false, mod}}
 			} else if (me.bstate & C.BUTTON1_RELEASED) > 0 {
 				double := false
-				if len(_clickY) > 1 && _clickY[0] == _clickY[1] &&
-					time.Now().Sub(_prevDownTime) < doubleClickDuration {
+				if len(r.clickY) > 1 && r.clickY[0] == r.clickY[1] &&
+					time.Now().Sub(r.prevDownTime) < doubleClickDuration {
 					double = true
 				}
 				return Event{Mouse, 0, &MouseEvent{y, x, 0, false, double, mod}}
@@ -416,7 +465,7 @@ func GetChar() Event {
 		}
 		return Event{Invalid, 0, nil}
 	case C.KEY_RESIZE:
-		return Event{Invalid, 0, nil}
+		return Event{Resize, 0, nil}
 	case ESC:
 		return escSequence()
 	case 127:

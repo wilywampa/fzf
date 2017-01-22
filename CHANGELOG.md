@@ -1,6 +1,40 @@
 CHANGELOG
 =========
 
+0.16.1
+------
+- Fixed `--height` option to properly fill the window with the background
+  color
+- Added `half-page-up` and `half-page-down` actions
+- Added `-L` flag to the default find command
+
+0.16.0
+------
+- *Added `--height HEIGHT[%]` option*
+    - fzf can now display finder without occupying the full screen
+- Preview window will truncate long lines by default. Line wrap can be enabled
+  by `:wrap` flag in `--preview-window`.
+- Latin script letters will be normalized before matching so that it's easier
+  to match against accented letters. e.g. `sodanco` can match `Só Danço Samba`.
+    - Normalization can be disabled via `--literal`
+- Added `--filepath-word` to make word-wise movements/actions (`alt-b`,
+  `alt-f`, `alt-bs`, `alt-d`) respect path separators
+
+0.15.9
+------
+- Fixed rendering glitches introduced in 0.15.8
+- The default escape delay is reduced to 50ms and is configurable via
+  `$ESCDELAY`
+- Scroll indicator at the top-right corner of the preview window is always
+  displayed when there's overflow
+- Can now be built with ncurses 6 or tcell to support extra features
+    - *ncurses 6*
+        - Supports more than 256 color pairs
+        - Supports italics
+    - *tcell*
+        - 24-bit color support
+    - See https://github.com/junegunn/fzf/blob/master/BUILD.md
+
 0.15.8
 ------
 - Updated ANSI processor to handle more VT-100 escape sequences

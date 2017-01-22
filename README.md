@@ -91,6 +91,11 @@ flawlessly.
 
 [wsl]: https://blogs.msdn.microsoft.com/wsl/
 
+Building fzf
+------------
+
+See [BUILD.md](BUILD.md).
+
 Usage
 -----
 
@@ -117,6 +122,29 @@ vim $(fzf)
 - Emacs style key bindings
 - Mouse: scroll, click, double-click; shift-click and shift-scroll on
   multi-select mode
+
+#### Layout
+
+fzf by default starts in fullscreen mode, but you can make it start below the
+cursor with `--height` option.
+
+```sh
+vim $(fzf --height 40%)
+```
+
+Also check out `--reverse` option if you prefer "top-down" layout instead of
+the default "bottom-up" layout.
+
+```sh
+vim $(fzf --height 40% --reverse)
+```
+
+You can add these options to `$FZF_DEFAULT_OPTS` so that they're applied by
+default.
+
+```sh
+export FZF_DEFAULT_OPTS='--height 40% --reverse'
+```
 
 #### Search syntax
 
@@ -184,6 +212,13 @@ cat /usr/share/dict/words | fzf-tmux -l 20% --multi --reverse
 It will still work even when you're not on tmux, silently ignoring `-[udlr]`
 options, so you can invariably use `fzf-tmux` in your scripts.
 
+Alternatively, you can use `--height HEIGHT[%]` option not to start fzf in
+fullscreen mode.
+
+```sh
+fzf --height 40%
+```
+
 Key bindings for command line
 -----------------------------
 
@@ -201,9 +236,9 @@ fish.
     - Set `FZF_ALT_C_COMMAND` to override the default command
     - Set `FZF_ALT_C_OPTS` to pass additional options
 
-If you're on a tmux session, fzf will start in a split pane. You may disable
-this tmux integration by setting `FZF_TMUX` to 0, or change the height of the
-pane with `FZF_TMUX_HEIGHT` (e.g. `20`, `50%`).
+If you're on a tmux session, you can start fzf in a split pane by setting
+`FZF_TMUX` to 1, and change the height of the pane with `FZF_TMUX_HEIGHT`
+(e.g. `20`, `50%`).
 
 If you use vi mode on bash, you need to add `set -o vi` *before* `source
 ~/.fzf.bash` in your .bashrc, so that it correctly sets up key bindings for vi
@@ -429,19 +464,41 @@ export FZF_DEFAULT_COMMAND='
 
 It's [a known bug of fish](https://github.com/fish-shell/fish-shell/issues/1362)
 that it doesn't allow reading from STDIN in command substitution, which means
-simple `vim (fzf)` won't work as expected. The workaround is to store the result
-of fzf to a temporary file.
+simple `vim (fzf)` won't work as expected. The workaround is to use the `read`
+fish command:
 
 ```sh
-fzf > $TMPDIR/fzf.result; and vim (cat $TMPDIR/fzf.result)
+fzf | read -l result; and vim $result
 ```
 
-License
--------
+or, for multiple results:
 
-[MIT](LICENSE)
+```sh
+fzf -m | while read -l r; set result $result $r; end; and vim $result
+```
 
-Author
-------
+The globbing system is different in fish and thus `**` completion will not work.
+However, the `CTRL-T` command will use the last token on the commandline as the
+root folder for the recursive search. For instance, hitting `CTRL-T` at the end
+of the following commandline
 
-Junegunn Choi
+```sh
+ls /var/
+```
+
+will list all files and folders under `/var/`.
+
+When using a custom `FZF_CTRL_T_COMMAND`, use the unexpanded `$dir` variable to
+make use of this feature. `$dir` defaults to `.` when the last token is not a
+valid directory. Example:
+
+```sh
+set -l FZF_CTRL_T_COMMAND "command find -L \$dir -type f 2> /dev/null | sed '1d; s#^\./##'"
+```
+
+[License](LICENSE)
+------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2017 Junegunn Choi

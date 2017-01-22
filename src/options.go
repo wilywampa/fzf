@@ -10,6 +10,7 @@ import (
 
 	"github.com/junegunn/fzf/src/algo"
 	"github.com/junegunn/fzf/src/tui"
+	"github.com/junegunn/fzf/src/util"
 
 	"github.com/junegunn/go-shellwords"
 )
@@ -23,6 +24,7 @@ const usage = `usage: fzf [options]
     --algo=TYPE           Fuzzy matching algorithm: [v1|v2] (default: v2)
     -i                    Case-insensitive match (default: smart-case match)
     +i                    Case-sensitive match
+    --literal             Do not normalize latin script letters before matching
     -n, --nth=N[,..]      Comma-separated list of field index expressions
                           for limiting search scope. Each can be a non-zero
                           integer or a range expression ([BEGIN]..[END]).
@@ -43,9 +45,14 @@ const usage = `usage: fzf [options]
     --no-hscroll          Disable horizontal scroll
     --hscroll-off=COL     Number of screen columns to keep to the right of the
                           highlighted substring (default: 10)
+    --filepath-word       Make word-wise movements respect path separators
     --jump-labels=CHARS   Label characters for jump and jump-accept
 
   Layout
+    --height=HEIGHT[%]    Display fzf window below the cursor with the given
+                          height instead of using fullscreen
+    --min-height=HEIGHT   Minimum height when --height is given in percent
+                          (default: 10)
     --reverse             Reverse orientation
     --margin=MARGIN       Screen margin (TRBL / TB,RL / T,RL,B / T,R,B,L)
     --inline-info         Display finder info inline with the query
@@ -66,7 +73,7 @@ const usage = `usage: fzf [options]
   Preview
     --preview=COMMAND     Command to preview highlighted line ({})
     --preview-window=OPT  Preview window layout (default: right:50%)
-                          [up|down|left|right][:SIZE[%]][:hidden]
+                          [up|down|left|right][:SIZE[%]][:wrap][:hidden]
 
   Scripting
     -q, --query=STR       Start the finder with the given query
@@ -126,6 +133,7 @@ type previewOpts struct {
 	position windowPosition
 	size     sizeSpec
 	hidden   bool
+	wrap     bool
 }
 
 // Options stores the values of command-line options
@@ -134,6 +142,7 @@ type Options struct {
 	FuzzyAlgo   algo.Algo
 	Extended    bool
 	Case        Case
+	Normalize   bool
 	Nth         []Range
 	WithNth     []Range
 	Delimiter   Delimiter
@@ -146,10 +155,13 @@ type Options struct {
 	Theme       *tui.ColorTheme
 	Black       bool
 	Bold        bool
+	Height      sizeSpec
+	MinHeight   int
 	Reverse     bool
 	Cycle       bool
 	Hscroll     bool
 	HscrollOff  int
+	FileWord    bool
 	InlineInfo  bool
 	JumpLabels  string
 	Prompt      string
@@ -180,6 +192,7 @@ func defaultOptions() *Options {
 		FuzzyAlgo:   algo.FuzzyMatchV2,
 		Extended:    true,
 		Case:        CaseSmart,
+		Normalize:   true,
 		Nth:         make([]Range, 0),
 		WithNth:     make([]Range, 0),
 		Delimiter:   Delimiter{},
@@ -192,10 +205,12 @@ func defaultOptions() *Options {
 		Theme:       tui.EmptyTheme(),
 		Black:       false,
 		Bold:        true,
+		MinHeight:   10,
 		Reverse:     false,
 		Cycle:       false,
 		Hscroll:     true,
 		HscrollOff:  10,
+		FileWord:    false,
 		InlineInfo:  false,
 		JumpLabels:  defaultJumpLabels,
 		Prompt:      "> ",
@@ -207,7 +222,7 @@ func defaultOptions() *Options {
 		Expect:      make(map[int]string),
 		Keymap:      make(map[int]actionType),
 		Execmap:     make(map[int]string),
-		Preview:     previewOpts{"", posRight, sizeSpec{50, true}, false},
+		Preview:     previewOpts{"", posRight, sizeSpec{50, true}, false, false},
 		PrintQuery:  false,
 		ReadZero:    false,
 		Printer:     func(str string) { fmt.Println(str) },
@@ -481,6 +496,7 @@ func dupeTheme(theme *tui.ColorTheme) *tui.ColorTheme {
 
 func parseTheme(defaultTheme *tui.ColorTheme, str string) *tui.ColorTheme {
 	theme := dupeTheme(defaultTheme)
+	rrggbb := regexp.MustCompile("^#[0-9a-fA-F]{6}$")
 	for _, str := range strings.Split(strings.ToLower(str), ",") {
 		switch str {
 		case "dark":
@@ -504,11 +520,17 @@ func parseTheme(defaultTheme *tui.ColorTheme, str string) *tui.ColorTheme {
 			if len(pair) != 2 {
 				fail()
 			}
-			ansi32, err := strconv.Atoi(pair[1])
-			if err != nil || ansi32 < -1 || ansi32 > 255 {
-				fail()
+
+			var ansi tui.Color
+			if rrggbb.MatchString(pair[1]) {
+				ansi = tui.HexToColor(pair[1])
+			} else {
+				ansi32, err := strconv.Atoi(pair[1])
+				if err != nil || ansi32 < -1 || ansi32 > 255 {
+					fail()
+				}
+				ansi = tui.Color(ansi32)
 			}
-			ansi := tui.Color(ansi32)
 			switch pair[0] {
 			case "fg":
 				theme.Fg = ansi
@@ -666,6 +688,10 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 			keymap[key] = actPageUp
 		case "page-down":
 			keymap[key] = actPageDown
+		case "half-page-up":
+			keymap[key] = actHalfPageUp
+		case "half-page-down":
+			keymap[key] = actHalfPageDown
 		case "previous-history":
 			keymap[key] = actPreviousHistory
 		case "next-history":
@@ -759,40 +785,52 @@ func parseSize(str string, maxPercent float64, label string) sizeSpec {
 	return sizeSpec{val, percent}
 }
 
+func parseHeight(str string) sizeSpec {
+	if util.IsWindows() {
+		errorExit("--height options is currently not supported on Windows")
+	}
+	size := parseSize(str, 100, "height")
+	return size
+}
+
 func parsePreviewWindow(opts *previewOpts, input string) {
-	layout := input
+	// Default
+	opts.position = posRight
+	opts.size = sizeSpec{50, true}
 	opts.hidden = false
-	if strings.HasSuffix(layout, ":hidden") {
-		opts.hidden = true
-		layout = strings.TrimSuffix(layout, ":hidden")
-	}
+	opts.wrap = false
 
-	tokens := strings.Split(layout, ":")
-	if len(tokens) == 0 || len(tokens) > 2 {
-		errorExit("invalid window layout: " + input)
-	}
-
-	if len(tokens) > 1 {
-		opts.size = parseSize(tokens[1], 99, "window size")
-	} else {
-		opts.size = sizeSpec{50, true}
+	tokens := strings.Split(input, ":")
+	sizeRegex := regexp.MustCompile("^[1-9][0-9]*%?$")
+	for _, token := range tokens {
+		switch token {
+		case "hidden":
+			opts.hidden = true
+		case "wrap":
+			opts.wrap = true
+		case "up", "top":
+			opts.position = posUp
+		case "down", "bottom":
+			opts.position = posDown
+		case "left":
+			opts.position = posLeft
+		case "right":
+			opts.position = posRight
+		default:
+			if sizeRegex.MatchString(token) {
+				opts.size = parseSize(token, 99, "window size")
+			} else {
+				errorExit("invalid preview window layout: " + input)
+			}
+		}
 	}
 	if !opts.size.percent && opts.size.size > 0 {
 		// Adjust size for border
 		opts.size.size += 2
-	}
-
-	switch tokens[0] {
-	case "up":
-		opts.position = posUp
-	case "down":
-		opts.position = posDown
-	case "left":
-		opts.position = posLeft
-	case "right":
-		opts.position = posRight
-	default:
-		errorExit("invalid window position: " + input)
+		// And padding
+		if opts.position == posLeft || opts.position == posRight {
+			opts.size.size += 2
+		}
 	}
 }
 
@@ -870,6 +908,10 @@ func parseOptions(opts *Options, allArgs []string) {
 		case "-f", "--filter":
 			filter := nextString(allArgs, &i, "query string required")
 			opts.Filter = &filter
+		case "--literal":
+			opts.Normalize = false
+		case "--no-literal":
+			opts.Normalize = true
 		case "--algo":
 			opts.FuzzyAlgo = parseAlgo(nextString(allArgs, &i, "algorithm required (v1|v2)"))
 		case "--expect":
@@ -941,6 +983,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Hscroll = false
 		case "--hscroll-off":
 			opts.HscrollOff = nextInt(allArgs, &i, "hscroll offset required")
+		case "--filepath-word":
+			opts.FileWord = true
+		case "--no-filepath-word":
+			opts.FileWord = false
 		case "--inline-info":
 			opts.InlineInfo = true
 		case "--no-inline-info":
@@ -997,7 +1043,13 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Preview.command = ""
 		case "--preview-window":
 			parsePreviewWindow(&opts.Preview,
-				nextString(allArgs, &i, "preview window layout required: [up|down|left|right][:SIZE[%]]"))
+				nextString(allArgs, &i, "preview window layout required: [up|down|left|right][:SIZE[%]][:wrap][:hidden]"))
+		case "--height":
+			opts.Height = parseHeight(nextString(allArgs, &i, "height required: HEIGHT[%]"))
+		case "--min-height":
+			opts.MinHeight = nextInt(allArgs, &i, "height required: HEIGHT")
+		case "--no-height":
+			opts.Height = sizeSpec{}
 		case "--no-margin":
 			opts.Margin = defaultMargin()
 		case "--margin":
@@ -1024,6 +1076,10 @@ func parseOptions(opts *Options, allArgs []string) {
 				opts.WithNth = splitNth(value)
 			} else if match, _ := optString(arg, "-s", "--sort="); match {
 				opts.Sort = 1 // Don't care
+			} else if match, value := optString(arg, "--height="); match {
+				opts.Height = parseHeight(value)
+			} else if match, value := optString(arg, "--min-height="); match {
+				opts.MinHeight = atoi(value)
 			} else if match, value := optString(arg, "--toggle-sort="); match {
 				parseToggleSort(opts.Keymap, value)
 			} else if match, value := optString(arg, "--expect="); match {

@@ -143,15 +143,17 @@ func interpretCode(ansiCode string, prevState *ansiState) *ansiState {
 				case 49:
 					state.bg = -1
 				case 1:
-					state.attr = tui.Bold
+					state.attr = state.attr | tui.Bold
 				case 2:
-					state.attr = tui.Dim
+					state.attr = state.attr | tui.Dim
+				case 3:
+					state.attr = state.attr | tui.Italic
 				case 4:
-					state.attr = tui.Underline
+					state.attr = state.attr | tui.Underline
 				case 5:
-					state.attr = tui.Blink
+					state.attr = state.attr | tui.Blink
 				case 7:
-					state.attr = tui.Reverse
+					state.attr = state.attr | tui.Reverse
 				case 0:
 					init()
 				default:
@@ -167,6 +169,8 @@ func interpretCode(ansiCode string, prevState *ansiState) *ansiState {
 				}
 			case 1:
 				switch num {
+				case 2:
+					state256 = 10 // MAGIC
 				case 5:
 					state256++
 				default:
@@ -175,8 +179,20 @@ func interpretCode(ansiCode string, prevState *ansiState) *ansiState {
 			case 2:
 				*ptr = tui.Color(num)
 				state256 = 0
+			case 10:
+				*ptr = tui.Color(1<<24) | tui.Color(num<<16)
+				state256++
+			case 11:
+				*ptr = *ptr | tui.Color(num<<8)
+				state256++
+			case 12:
+				*ptr = *ptr | tui.Color(num)
+				state256 = 0
 			}
 		}
+	}
+	if state256 > 0 {
+		*ptr = -1
 	}
 	return state
 }
