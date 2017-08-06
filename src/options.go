@@ -12,7 +12,7 @@ import (
 	"github.com/junegunn/fzf/src/tui"
 	"github.com/junegunn/fzf/src/util"
 
-	"github.com/junegunn/go-shellwords"
+	"github.com/mattn/go-shellwords"
 )
 
 const usage = `usage: fzf [options]
@@ -54,6 +54,7 @@ const usage = `usage: fzf [options]
     --min-height=HEIGHT   Minimum height when --height is given in percent
                           (default: 10)
     --reverse             Reverse orientation
+    --border              Draw border above and below the finder
     --margin=MARGIN       Screen margin (TRBL / TB,RL / T,RL,B / T,R,B,L)
     --inline-info         Display finder info inline with the query
     --prompt=STR          Input prompt (default: '> ')
@@ -82,7 +83,10 @@ const usage = `usage: fzf [options]
     -f, --filter=STR      Filter mode. Do not start interactive finder.
     --print-query         Print query as the first line
     --expect=KEYS         Comma-separated list of keys to complete fzf
+    --read0               Read input delimited by ASCII NUL characters
+    --print0              Print output delimited by ASCII NUL characters
     --sync                Synchronous search for multi-staged filtering
+    --version             Display version information and exit
 
   Environment variables
     FZF_DEFAULT_COMMAND   Default command to use when input is tty
@@ -171,8 +175,7 @@ type Options struct {
 	Filter      *string
 	ToggleSort  bool
 	Expect      map[int]string
-	Keymap      map[int]actionType
-	Execmap     map[int]string
+	Keymap      map[int][]action
 	Preview     previewOpts
 	PrintQuery  bool
 	ReadZero    bool
@@ -182,7 +185,9 @@ type Options struct {
 	Header      []string
 	HeaderLines int
 	Margin      [4]sizeSpec
+	Bordered    bool
 	Tabstop     int
+	ClearOnExit bool
 	Version     bool
 }
 
@@ -220,8 +225,7 @@ func defaultOptions() *Options {
 		Filter:      nil,
 		ToggleSort:  false,
 		Expect:      make(map[int]string),
-		Keymap:      make(map[int]actionType),
-		Execmap:     make(map[int]string),
+		Keymap:      make(map[int][]action),
 		Preview:     previewOpts{"", posRight, sizeSpec{50, true}, false, false},
 		PrintQuery:  false,
 		ReadZero:    false,
@@ -232,6 +236,7 @@ func defaultOptions() *Options {
 		HeaderLines: 0,
 		Margin:      defaultMargin(),
 		Tabstop:     8,
+		ClearOnExit: true,
 		Version:     false}
 }
 
@@ -393,8 +398,12 @@ func parseKeyChords(str string, message string) map[int]string {
 			chord = tui.AltZ + int(' ')
 		case "bspace", "bs":
 			chord = tui.BSpace
+		case "ctrl-space":
+			chord = tui.CtrlSpace
+		case "change":
+			chord = tui.Change
 		case "alt-enter", "alt-return":
-			chord = tui.AltEnter
+			chord = tui.CtrlAltM
 		case "alt-space":
 			chord = tui.AltSpace
 		case "alt-/":
@@ -430,7 +439,9 @@ func parseKeyChords(str string, message string) map[int]string {
 		case "f12":
 			chord = tui.F12
 		default:
-			if len(key) == 6 && strings.HasPrefix(lkey, "ctrl-") && isAlphabet(lkey[5]) {
+			if len(key) == 10 && strings.HasPrefix(lkey, "ctrl-alt-") && isAlphabet(lkey[9]) {
+				chord = tui.CtrlAltA + int(lkey[9]) - 'a'
+			} else if len(key) == 6 && strings.HasPrefix(lkey, "ctrl-") && isAlphabet(lkey[5]) {
 				chord = tui.CtrlA + int(lkey[5]) - 'a'
 			} else if len(key) == 5 && strings.HasPrefix(lkey, "alt-") && isAlphabet(lkey[4]) {
 				chord = tui.AltA + int(lkey[4]) - 'a'
@@ -578,23 +589,32 @@ func firstKey(keymap map[int]string) int {
 const (
 	escapedColon = 0
 	escapedComma = 1
+	escapedPlus  = 2
 )
 
-func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) {
-	if executeRegexp == nil {
-		// Backreferences are not supported.
-		// "~!@#$%^&*;/|".each_char.map { |c| Regexp.escape(c) }.map { |c| "#{c}[^#{c}]*#{c}" }.join('|')
-		executeRegexp = regexp.MustCompile(
-			"(?s):execute(-multi)?:.*|:execute(-multi)?(\\([^)]*\\)|\\[[^\\]]*\\]|~[^~]*~|![^!]*!|@[^@]*@|\\#[^\\#]*\\#|\\$[^\\$]*\\$|%[^%]*%|\\^[^\\^]*\\^|&[^&]*&|\\*[^\\*]*\\*|;[^;]*;|/[^/]*/|\\|[^\\|]*\\|)")
-	}
+func init() {
+	// Backreferences are not supported.
+	// "~!@#$%^&*;/|".each_char.map { |c| Regexp.escape(c) }.map { |c| "#{c}[^#{c}]*#{c}" }.join('|')
+	executeRegexp = regexp.MustCompile(
+		"(?si):(execute(?:-multi|-silent)?):.+|:(execute(?:-multi|-silent)?)(\\([^)]*\\)|\\[[^\\]]*\\]|~[^~]*~|![^!]*!|@[^@]*@|\\#[^\\#]*\\#|\\$[^\\$]*\\$|%[^%]*%|\\^[^\\^]*\\^|&[^&]*&|\\*[^\\*]*\\*|;[^;]*;|/[^/]*/|\\|[^\\|]*\\|)")
+}
+
+func parseKeymap(keymap map[int][]action, str string) {
 	masked := executeRegexp.ReplaceAllStringFunc(str, func(src string) string {
-		if strings.HasPrefix(src, ":execute-multi") {
-			return ":execute-multi(" + strings.Repeat(" ", len(src)-len(":execute-multi()")) + ")"
+		prefix := ":execute"
+		if src[len(prefix)] == '-' {
+			c := src[len(prefix)+1]
+			if c == 's' || c == 'S' {
+				prefix += "-silent"
+			} else {
+				prefix += "-multi"
+			}
 		}
-		return ":execute(" + strings.Repeat(" ", len(src)-len(":execute()")) + ")"
+		return prefix + "(" + strings.Repeat(" ", len(src)-len(prefix)-2) + ")"
 	})
 	masked = strings.Replace(masked, "::", string([]rune{escapedColon, ':'}), -1)
 	masked = strings.Replace(masked, ",:", string([]rune{escapedComma, ':'}), -1)
+	masked = strings.Replace(masked, "+:", string([]rune{escapedPlus, ':'}), -1)
 
 	idx := 0
 	for _, pairStr := range strings.Split(masked, ",") {
@@ -610,151 +630,178 @@ func parseKeymap(keymap map[int]actionType, execmap map[int]string, str string) 
 			key = ':' + tui.AltZ
 		} else if len(pair[0]) == 1 && pair[0][0] == escapedComma {
 			key = ',' + tui.AltZ
+		} else if len(pair[0]) == 1 && pair[0][0] == escapedPlus {
+			key = '+' + tui.AltZ
 		} else {
 			keys := parseKeyChords(pair[0], "key name required")
 			key = firstKey(keys)
 		}
 
-		act := origPairStr[len(pair[0])+1 : len(origPairStr)]
-		actLower := strings.ToLower(act)
-		switch actLower {
-		case "ignore":
-			keymap[key] = actIgnore
-		case "beginning-of-line":
-			keymap[key] = actBeginningOfLine
-		case "abort":
-			keymap[key] = actAbort
-		case "accept":
-			keymap[key] = actAccept
-		case "print-query":
-			keymap[key] = actPrintQuery
-		case "backward-char":
-			keymap[key] = actBackwardChar
-		case "backward-delete-char":
-			keymap[key] = actBackwardDeleteChar
-		case "backward-word":
-			keymap[key] = actBackwardWord
-		case "clear-screen":
-			keymap[key] = actClearScreen
-		case "delete-char":
-			keymap[key] = actDeleteChar
-		case "delete-char/eof":
-			keymap[key] = actDeleteCharEOF
-		case "end-of-line":
-			keymap[key] = actEndOfLine
-		case "cancel":
-			keymap[key] = actCancel
-		case "forward-char":
-			keymap[key] = actForwardChar
-		case "forward-word":
-			keymap[key] = actForwardWord
-		case "jump":
-			keymap[key] = actJump
-		case "jump-accept":
-			keymap[key] = actJumpAccept
-		case "kill-line":
-			keymap[key] = actKillLine
-		case "kill-word":
-			keymap[key] = actKillWord
-		case "unix-line-discard", "line-discard":
-			keymap[key] = actUnixLineDiscard
-		case "unix-word-rubout", "word-rubout":
-			keymap[key] = actUnixWordRubout
-		case "yank":
-			keymap[key] = actYank
-		case "backward-kill-word":
-			keymap[key] = actBackwardKillWord
-		case "toggle-down":
-			keymap[key] = actToggleDown
-		case "toggle-up":
-			keymap[key] = actToggleUp
-		case "toggle-in":
-			keymap[key] = actToggleIn
-		case "toggle-out":
-			keymap[key] = actToggleOut
-		case "toggle-all":
-			keymap[key] = actToggleAll
-		case "select-all":
-			keymap[key] = actSelectAll
-		case "deselect-all":
-			keymap[key] = actDeselectAll
-		case "toggle":
-			keymap[key] = actToggle
-		case "down":
-			keymap[key] = actDown
-		case "up":
-			keymap[key] = actUp
-		case "page-up":
-			keymap[key] = actPageUp
-		case "page-down":
-			keymap[key] = actPageDown
-		case "half-page-up":
-			keymap[key] = actHalfPageUp
-		case "half-page-down":
-			keymap[key] = actHalfPageDown
-		case "previous-history":
-			keymap[key] = actPreviousHistory
-		case "next-history":
-			keymap[key] = actNextHistory
-		case "toggle-preview":
-			keymap[key] = actTogglePreview
-		case "toggle-sort":
-			keymap[key] = actToggleSort
-		case "preview-up":
-			keymap[key] = actPreviewUp
-		case "preview-down":
-			keymap[key] = actPreviewDown
-		case "preview-page-up":
-			keymap[key] = actPreviewPageUp
-		case "preview-page-down":
-			keymap[key] = actPreviewPageDown
-		default:
-			if isExecuteAction(actLower) {
-				var offset int
-				if strings.HasPrefix(actLower, "execute-multi") {
-					keymap[key] = actExecuteMulti
-					offset = len("execute-multi")
+		idx2 := len(pair[0]) + 1
+		specs := strings.Split(pair[1], "+")
+		actions := make([]action, 0, len(specs))
+		appendAction := func(types ...actionType) {
+			actions = append(actions, toActions(types...)...)
+		}
+		prevSpec := ""
+		for specIndex, maskedSpec := range specs {
+			spec := origPairStr[idx2 : idx2+len(maskedSpec)]
+			idx2 += len(maskedSpec) + 1
+			spec = prevSpec + spec
+			specLower := strings.ToLower(spec)
+			switch specLower {
+			case "ignore":
+				appendAction(actIgnore)
+			case "beginning-of-line":
+				appendAction(actBeginningOfLine)
+			case "abort":
+				appendAction(actAbort)
+			case "accept":
+				appendAction(actAccept)
+			case "print-query":
+				appendAction(actPrintQuery)
+			case "backward-char":
+				appendAction(actBackwardChar)
+			case "backward-delete-char":
+				appendAction(actBackwardDeleteChar)
+			case "backward-word":
+				appendAction(actBackwardWord)
+			case "clear-screen":
+				appendAction(actClearScreen)
+			case "delete-char":
+				appendAction(actDeleteChar)
+			case "delete-char/eof":
+				appendAction(actDeleteCharEOF)
+			case "end-of-line":
+				appendAction(actEndOfLine)
+			case "cancel":
+				appendAction(actCancel)
+			case "forward-char":
+				appendAction(actForwardChar)
+			case "forward-word":
+				appendAction(actForwardWord)
+			case "jump":
+				appendAction(actJump)
+			case "jump-accept":
+				appendAction(actJumpAccept)
+			case "kill-line":
+				appendAction(actKillLine)
+			case "kill-word":
+				appendAction(actKillWord)
+			case "unix-line-discard", "line-discard":
+				appendAction(actUnixLineDiscard)
+			case "unix-word-rubout", "word-rubout":
+				appendAction(actUnixWordRubout)
+			case "yank":
+				appendAction(actYank)
+			case "backward-kill-word":
+				appendAction(actBackwardKillWord)
+			case "toggle-down":
+				appendAction(actToggle, actDown)
+			case "toggle-up":
+				appendAction(actToggle, actUp)
+			case "toggle-in":
+				appendAction(actToggleIn)
+			case "toggle-out":
+				appendAction(actToggleOut)
+			case "toggle-all":
+				appendAction(actToggleAll)
+			case "select-all":
+				appendAction(actSelectAll)
+			case "deselect-all":
+				appendAction(actDeselectAll)
+			case "toggle":
+				appendAction(actToggle)
+			case "down":
+				appendAction(actDown)
+			case "up":
+				appendAction(actUp)
+			case "top":
+				appendAction(actTop)
+			case "page-up":
+				appendAction(actPageUp)
+			case "page-down":
+				appendAction(actPageDown)
+			case "half-page-up":
+				appendAction(actHalfPageUp)
+			case "half-page-down":
+				appendAction(actHalfPageDown)
+			case "previous-history":
+				appendAction(actPreviousHistory)
+			case "next-history":
+				appendAction(actNextHistory)
+			case "toggle-preview":
+				appendAction(actTogglePreview)
+			case "toggle-preview-wrap":
+				appendAction(actTogglePreviewWrap)
+			case "toggle-sort":
+				appendAction(actToggleSort)
+			case "preview-up":
+				appendAction(actPreviewUp)
+			case "preview-down":
+				appendAction(actPreviewDown)
+			case "preview-page-up":
+				appendAction(actPreviewPageUp)
+			case "preview-page-down":
+				appendAction(actPreviewPageDown)
+			default:
+				t := isExecuteAction(specLower)
+				if t == actIgnore {
+					errorExit("unknown action: " + spec)
 				} else {
-					keymap[key] = actExecute
-					offset = len("execute")
+					var offset int
+					switch t {
+					case actExecuteSilent:
+						offset = len("execute-silent")
+					case actExecuteMulti:
+						offset = len("execute-multi")
+					default:
+						offset = len("execute")
+					}
+					if spec[offset] == ':' {
+						if specIndex == len(specs)-1 {
+							actions = append(actions, action{t: t, a: spec[offset+1:]})
+						} else {
+							prevSpec = spec + "+"
+							continue
+						}
+					} else {
+						actions = append(actions, action{t: t, a: spec[offset+1 : len(spec)-1]})
+					}
 				}
-				if act[offset] == ':' {
-					execmap[key] = act[offset+1:]
-				} else {
-					execmap[key] = act[offset+1 : len(act)-1]
-				}
-			} else {
-				errorExit("unknown action: " + act)
 			}
+			prevSpec = ""
 		}
+		keymap[key] = actions
 	}
 }
 
-func isExecuteAction(str string) bool {
-	if !strings.HasPrefix(str, "execute") || len(str) < len("execute()") {
-		return false
+func isExecuteAction(str string) actionType {
+	matches := executeRegexp.FindAllStringSubmatch(":"+str, -1)
+	if matches == nil || len(matches) != 1 {
+		return actIgnore
 	}
-	b := str[len("execute")]
-	if strings.HasPrefix(str, "execute-multi") {
-		if len(str) < len("execute-multi()") {
-			return false
-		}
-		b = str[len("execute-multi")]
+	prefix := matches[0][1]
+	if len(prefix) == 0 {
+		prefix = matches[0][2]
 	}
-	e := str[len(str)-1]
-	if b == ':' || b == '(' && e == ')' || b == '[' && e == ']' ||
-		b == e && strings.ContainsAny(string(b), "~!@#$%^&*;/|") {
-		return true
+	switch prefix {
+	case "execute":
+		return actExecute
+	case "execute-silent":
+		return actExecuteSilent
+	case "execute-multi":
+		return actExecuteMulti
 	}
-	return false
+	return actIgnore
 }
 
-func parseToggleSort(keymap map[int]actionType, str string) {
+func parseToggleSort(keymap map[int][]action, str string) {
 	keys := parseKeyChords(str, "key name required")
 	if len(keys) != 1 {
 		errorExit("multiple keys specified")
 	}
-	keymap[firstKey(keys)] = actToggleSort
+	keymap[firstKey(keys)] = toActions(actToggleSort)
 }
 
 func strLines(str string) []string {
@@ -801,7 +848,7 @@ func parsePreviewWindow(opts *previewOpts, input string) {
 	opts.wrap = false
 
 	tokens := strings.Split(input, ":")
-	sizeRegex := regexp.MustCompile("^[1-9][0-9]*%?$")
+	sizeRegex := regexp.MustCompile("^[0-9]+%?$")
 	for _, token := range tokens {
 		switch token {
 		case "hidden":
@@ -916,10 +963,12 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.FuzzyAlgo = parseAlgo(nextString(allArgs, &i, "algorithm required (v1|v2)"))
 		case "--expect":
 			opts.Expect = parseKeyChords(nextString(allArgs, &i, "key names required"), "key names required")
+		case "--no-expect":
+			opts.Expect = make(map[int]string)
 		case "--tiebreak":
 			opts.Criteria = parseTiebreak(nextString(allArgs, &i, "sort criterion required"))
 		case "--bind":
-			parseKeymap(opts.Keymap, opts.Execmap, nextString(allArgs, &i, "bind expression required"))
+			parseKeymap(opts.Keymap, nextString(allArgs, &i, "bind expression required"))
 		case "--color":
 			spec := optionalNextString(allArgs, &i)
 			if len(spec) == 0 {
@@ -1052,11 +1101,19 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.Height = sizeSpec{}
 		case "--no-margin":
 			opts.Margin = defaultMargin()
+		case "--no-border":
+			opts.Bordered = false
+		case "--border":
+			opts.Bordered = true
 		case "--margin":
 			opts.Margin = parseMargin(
 				nextString(allArgs, &i, "margin required (TRBL / TB,RL / T,RL,B / T,R,B,L)"))
 		case "--tabstop":
 			opts.Tabstop = nextInt(allArgs, &i, "tab stop required")
+		case "--clear":
+			opts.ClearOnExit = true
+		case "--no-clear":
+			opts.ClearOnExit = false
 		case "--version":
 			opts.Version = true
 		default:
@@ -1089,7 +1146,7 @@ func parseOptions(opts *Options, allArgs []string) {
 			} else if match, value := optString(arg, "--color="); match {
 				opts.Theme = parseTheme(opts.Theme, value)
 			} else if match, value := optString(arg, "--bind="); match {
-				parseKeymap(opts.Keymap, opts.Execmap, value)
+				parseKeymap(opts.Keymap, value)
 			} else if match, value := optString(arg, "--history="); match {
 				setHistory(value)
 			} else if match, value := optString(arg, "--history-size="); match {
@@ -1145,20 +1202,22 @@ func postProcessOptions(opts *Options) {
 	// Default actions for CTRL-N / CTRL-P when --history is set
 	if opts.History != nil {
 		if _, prs := opts.Keymap[tui.CtrlP]; !prs {
-			opts.Keymap[tui.CtrlP] = actPreviousHistory
+			opts.Keymap[tui.CtrlP] = toActions(actPreviousHistory)
 		}
 		if _, prs := opts.Keymap[tui.CtrlN]; !prs {
-			opts.Keymap[tui.CtrlN] = actNextHistory
+			opts.Keymap[tui.CtrlN] = toActions(actNextHistory)
 		}
 	}
 
 	// Extend the default key map
 	keymap := defaultKeymap()
-	for key, act := range opts.Keymap {
-		if act == actToggleSort {
-			opts.ToggleSort = true
+	for key, actions := range opts.Keymap {
+		for _, act := range actions {
+			if act.t == actToggleSort {
+				opts.ToggleSort = true
+			}
 		}
-		keymap[key] = act
+		keymap[key] = actions
 	}
 	opts.Keymap = keymap
 

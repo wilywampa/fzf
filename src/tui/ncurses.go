@@ -1,3 +1,4 @@
+// +build ncurses
 // +build !windows
 // +build !tcell
 
@@ -31,6 +32,10 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+func HasFullscreenRenderer() bool {
+	return true
+}
 
 type Attr C.uint
 
@@ -171,12 +176,11 @@ func initPairs(theme *ColorTheme) {
 	}
 }
 
-func (r *FullscreenRenderer) Pause() {
+func (r *FullscreenRenderer) Pause(bool) {
 	C.endwin()
 }
 
-func (r *FullscreenRenderer) Resume() bool {
-	return false
+func (r *FullscreenRenderer) Resume(bool) {
 }
 
 func (r *FullscreenRenderer) Close() {
@@ -184,12 +188,13 @@ func (r *FullscreenRenderer) Close() {
 	C.delscreen(_screen)
 }
 
-func (r *FullscreenRenderer) NewWindow(top int, left int, width int, height int, border bool) Window {
+func (r *FullscreenRenderer) NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window {
 	win := C.newwin(C.int(height), C.int(width), C.int(top), C.int(left))
 	if r.theme != nil {
 		C.wbkgd(win, C.chtype(C.COLOR_PAIR(C.int(ColNormal.index()))))
 	}
-	if border {
+	// FIXME Does not implement BorderHorizontal
+	if borderStyle != BorderNone {
 		pair, attr := _colorFn(ColBorder, 0)
 		C.wcolor_set(win, pair, nil)
 		C.wattron(win, attr)
@@ -347,7 +352,7 @@ func escSequence() Event {
 	case C.ERR:
 		return Event{ESC, 0, nil}
 	case CtrlM:
-		return Event{AltEnter, 0, nil}
+		return Event{CtrlAltM, 0, nil}
 	case '/':
 		return Event{AltSlash, 0, nil}
 	case ' ':
@@ -470,6 +475,8 @@ func (r *FullscreenRenderer) GetChar() Event {
 		return escSequence()
 	case 127:
 		return Event{BSpace, 0, nil}
+	case 0:
+		return Event{CtrlSpace, 0, nil}
 	}
 	// CTRL-A ~ CTRL-Z
 	if c >= CtrlA && c <= CtrlZ {

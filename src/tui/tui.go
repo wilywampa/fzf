@@ -38,6 +38,7 @@ const (
 	CtrlY
 	CtrlZ
 	ESC
+	CtrlSpace
 
 	Invalid
 	Resize
@@ -74,7 +75,8 @@ const (
 	F11
 	F12
 
-	AltEnter
+	Change
+
 	AltSpace
 	AltSlash
 	AltBS
@@ -89,7 +91,9 @@ const ( // Reset iota
 	AltD
 	AltE
 	AltF
-	AltZ = AltA + 'z' - 'a'
+	AltZ     = AltA + 'z' - 'a'
+	CtrlAltA = AltZ + 1
+	CtrlAltM = CtrlAltA + 'm' - 'a'
 )
 
 const (
@@ -194,10 +198,18 @@ type MouseEvent struct {
 	Mod    bool
 }
 
+type BorderStyle int
+
+const (
+	BorderNone BorderStyle = iota
+	BorderAround
+	BorderHorizontal
+)
+
 type Renderer interface {
 	Init()
-	Pause()
-	Resume() bool
+	Pause(clear bool)
+	Resume(clear bool)
 	Clear()
 	RefreshWindows(windows []Window)
 	Refresh()
@@ -210,7 +222,7 @@ type Renderer interface {
 	DoesAutoWrap() bool
 	IsOptimized() bool
 
-	NewWindow(top int, left int, width int, height int, border bool) Window
+	NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window
 }
 
 type Window interface {
@@ -224,6 +236,7 @@ type Window interface {
 	Close()
 
 	X() int
+	Y() int
 	Enclose(y int, x int) bool
 
 	Move(y int, x int)

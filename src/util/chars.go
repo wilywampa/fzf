@@ -3,63 +3,103 @@ package util
 import (
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
+)
+
+const (
+	overflow64 uint64 = 0x8080808080808080
+	overflow32 uint32 = 0x80808080
 )
 
 type Chars struct {
-	runes []rune
-	bytes []byte
+	slice           []byte // or []rune
+	inBytes         bool
+	trimLengthKnown bool
+	trimLength      uint16
+
+	// XXX Piggybacking item index here is a horrible idea. But I'm trying to
+	// minimize the memory footprint by not wasting padded spaces.
+	Index int32
+}
+
+func checkAscii(bytes []byte) (bool, int) {
+	i := 0
+	for ; i <= len(bytes)-8; i += 8 {
+		if (overflow64 & *(*uint64)(unsafe.Pointer(&bytes[i]))) > 0 {
+			return false, i
+		}
+	}
+	for ; i <= len(bytes)-4; i += 4 {
+		if (overflow32 & *(*uint32)(unsafe.Pointer(&bytes[i]))) > 0 {
+			return false, i
+		}
+	}
+	for ; i < len(bytes); i++ {
+		if bytes[i] >= utf8.RuneSelf {
+			return false, i
+		}
+	}
+	return true, 0
 }
 
 // ToChars converts byte array into rune array
-func ToChars(bytea []byte) Chars {
-	var runes []rune
-	ascii := true
-	numBytes := len(bytea)
-	for i := 0; i < numBytes; {
-		if bytea[i] < utf8.RuneSelf {
-			if !ascii {
-				runes = append(runes, rune(bytea[i]))
-			}
-			i++
-		} else {
-			if ascii {
-				ascii = false
-				runes = make([]rune, i, numBytes)
-				for j := 0; j < i; j++ {
-					runes[j] = rune(bytea[j])
-				}
-			}
-			r, sz := utf8.DecodeRune(bytea[i:])
-			i += sz
-			runes = append(runes, r)
-		}
+func ToChars(bytes []byte) Chars {
+	inBytes, bytesUntil := checkAscii(bytes)
+	if inBytes {
+		return Chars{slice: bytes, inBytes: inBytes}
 	}
-	if ascii {
-		return Chars{bytes: bytea}
+
+	runes := make([]rune, bytesUntil, len(bytes))
+	for i := 0; i < bytesUntil; i++ {
+		runes[i] = rune(bytes[i])
 	}
-	return Chars{runes: runes}
+	for i := bytesUntil; i < len(bytes); {
+		r, sz := utf8.DecodeRune(bytes[i:])
+		i += sz
+		runes = append(runes, r)
+	}
+	return RunesToChars(runes)
 }
 
 func RunesToChars(runes []rune) Chars {
-	return Chars{runes: runes}
+	return Chars{slice: *(*[]byte)(unsafe.Pointer(&runes)), inBytes: false}
+}
+
+func (chars *Chars) IsBytes() bool {
+	return chars.inBytes
+}
+
+func (chars *Chars) Bytes() []byte {
+	return chars.slice
+}
+
+func (chars *Chars) optionalRunes() []rune {
+	if chars.inBytes {
+		return nil
+	}
+	return *(*[]rune)(unsafe.Pointer(&chars.slice))
 }
 
 func (chars *Chars) Get(i int) rune {
-	if chars.runes != nil {
-		return chars.runes[i]
+	if runes := chars.optionalRunes(); runes != nil {
+		return runes[i]
 	}
-	return rune(chars.bytes[i])
+	return rune(chars.slice[i])
 }
 
 func (chars *Chars) Length() int {
-	if chars.runes != nil {
-		return len(chars.runes)
+	if runes := chars.optionalRunes(); runes != nil {
+		return len(runes)
 	}
-	return len(chars.bytes)
+	return len(chars.slice)
 }
 
 // TrimLength returns the length after trimming leading and trailing whitespaces
-func (chars *Chars) TrimLength() int {
+func (chars *Chars) TrimLength() uint16 {
+	if chars.trimLengthKnown {
+		return chars.trimLength
+	}
+	chars.trimLengthKnown = true
 	var i int
 	len := chars.Length()
 	for i = len - 1; i >= 0; i-- {
@@ -80,7 +120,8 @@ func (chars *Chars) TrimLength() int {
 			break
 		}
 	}
-	return i - j + 1
+	chars.trimLength = AsUint16(i - j + 1)
+	return chars.trimLength
 }
 
 func (chars *Chars) TrailingWhitespaces() int {
@@ -96,62 +137,31 @@ func (chars *Chars) TrailingWhitespaces() int {
 }
 
 func (chars *Chars) ToString() string {
-	if chars.runes != nil {
-		return string(chars.runes)
+	if runes := chars.optionalRunes(); runes != nil {
+		return string(runes)
 	}
-	return string(chars.bytes)
+	return string(chars.slice)
 }
 
 func (chars *Chars) ToRunes() []rune {
-	if chars.runes != nil {
-		return chars.runes
+	if runes := chars.optionalRunes(); runes != nil {
+		return runes
 	}
-	runes := make([]rune, len(chars.bytes))
-	for idx, b := range chars.bytes {
+	bytes := chars.slice
+	runes := make([]rune, len(bytes))
+	for idx, b := range bytes {
 		runes[idx] = rune(b)
 	}
 	return runes
 }
 
-func (chars *Chars) Slice(b int, e int) Chars {
-	if chars.runes != nil {
-		return Chars{runes: chars.runes[b:e]}
+func (chars *Chars) CopyRunes(dest []rune) {
+	if runes := chars.optionalRunes(); runes != nil {
+		copy(dest, runes)
+		return
 	}
-	return Chars{bytes: chars.bytes[b:e]}
-}
-
-func (chars *Chars) Split(delimiter string) []Chars {
-	delim := []rune(delimiter)
-	numChars := chars.Length()
-	numDelim := len(delim)
-	begin := 0
-	ret := make([]Chars, 0, 1)
-
-	for index := 0; index < numChars; {
-		if index+numDelim <= numChars {
-			match := true
-			for off, d := range delim {
-				if chars.Get(index+off) != d {
-					match = false
-					break
-				}
-			}
-			// Found the delimiter
-			if match {
-				incr := Max(numDelim, 1)
-				ret = append(ret, chars.Slice(begin, index+incr))
-				index += incr
-				begin = index
-				continue
-			}
-		} else {
-			// Impossible to find the delimiter in the remaining substring
-			break
-		}
-		index++
+	for idx, b := range chars.slice {
+		dest[idx] = rune(b)
 	}
-	if begin < numChars || len(ret) == 0 {
-		ret = append(ret, chars.Slice(begin, numChars))
-	}
-	return ret
+	return
 }

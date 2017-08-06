@@ -1,6 +1,8 @@
-bin
-src/fzf/fzf-*
-gopath
+bin/fzf
+target
 pkg
 Gemfile.lock
 .DS_Store
+doc/tags
+vendor
+gopath

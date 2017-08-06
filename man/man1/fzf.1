@@ -21,7 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ..
-.TH fzf 1 "Jan 2017" "fzf 0.16.1" "fzf - a command-line fuzzy finder"
+.TH fzf 1 "Aug 2017" "fzf 0.16.11" "fzf - a command-line fuzzy finder"
 
 .SH NAME
 fzf - a command-line fuzzy finder
@@ -111,6 +111,9 @@ Comma-separated list of sort criteria to apply when the scores are tied.
 .B "-m, --multi"
 Enable multi-select with tab/shift-tab
 .TP
+.B "+m, --no-multi"
+Disable multi-select
+.TP
 .B "--no-mouse"
 Disable mouse
 .TP
@@ -155,6 +158,9 @@ Ignored when \fB--height\fR is not specified.
 .TP
 .B "--reverse"
 Reverse orientation
+.TP
+.B "--border"
+Draw border above and below the finder
 .TP
 .BI "--margin=" MARGIN
 Comma-separated expression for margins around the finder.
@@ -209,8 +215,7 @@ Number of spaces for a tab character (default: 8)
 Color configuration. The name of the base color scheme is followed by custom
 color mappings. Ansi color code of -1 denotes terminal default
 foreground/background color. You can also specify 24-bit color in \fB#rrggbb\fR
-format, but the support for 24-bit colors is experimental and only works when
-\fB--height\fR option is used.
+format.
 
 .RS
 e.g. \fBfzf --color=bg+:24\fR
@@ -234,6 +239,7 @@ e.g. \fBfzf --color=bg+:24\fR
     \fBbg+     \fRBackground (current line)
     \fBhl+     \fRHighlighted substrings (current line)
     \fBinfo    \fRInfo
+    \fBborder  \fRBorder of the preview window and horizontal separators (\fB--border\fR)
     \fBprompt  \fRPrompt
     \fBpointer \fRPointer to the current line
     \fBmarker  \fRMulti-select marker
@@ -263,12 +269,20 @@ Execute the given command for the current line and display the result on the
 preview window. \fB{}\fR in the command is the placeholder that is replaced to
 the single-quoted string of the current line. To transform the replacement
 string, specify field index expressions between the braces (See \fBFIELD INDEX
-EXPRESSION\fR for the details). Also, \fB{q}\fR is replaced to the current
-query string.
+EXPRESSION\fR for the details).
 
 .RS
 e.g. \fBfzf --preview="head -$LINES {}"\fR
      \fBls -l | fzf --preview="echo user={3} when={-4..-2}; cat {-1}" --header-lines=1\fR
+
+A placeholder expression starting with \fB+\fR flag will be replaced to the
+space-separated list of the selected lines (or the current line if no selection
+was made) individually quoted.
+
+e.g. \fBfzf --multi --preview="head -10 {+}"\fR
+     \fBgit log --oneline | fzf --multi --preview 'git show {+1}'\fR
+
+Also, \fB{q}\fR is replaced to the current query string.
 
 Note that you can escape a placeholder pattern by prepending a backslash.
 .RE
@@ -278,6 +292,9 @@ Determine the layout of the preview window. If the argument ends with
 \fB:hidden\fR, the preview window will be hidden by default until
 \fBtoggle-preview\fR action is triggered. Long lines are truncated by default.
 Line wrap can be enabled with \fB:wrap\fR flag.
+
+If size is given as 0, preview window will not be visible, but fzf will still
+execute the command in the background.
 
 .RS
 .B POSITION: (default: right)
@@ -321,10 +338,16 @@ e.g. \fBfzf --expect=ctrl-v,ctrl-t,alt-s,f1,f2,~,@\fR
 .RE
 .TP
 .B "--read0"
-Read input delimited by ASCII NUL character instead of newline character
+Read input delimited by ASCII NUL characters instead of newline characters
 .TP
 .B "--print0"
-Print output delimited by ASCII NUL character instead of newline character
+Print output delimited by ASCII NUL characters instead of newline characters
+.TP
+.B "--no-clear"
+Do not clear finder interface on exit. If fzf was started in full screen mode,
+it will not switch back to the original screen, so you'll have to manually run
+\fBtput rmcup\fR to return. This option can be used to avoid flickering of the
+screen when your application needs to start fzf multiple times in order.
 .TP
 .B "--sync"
 Synchronous search for multi-staged filtering. If specified, fzf will launch
@@ -333,6 +356,12 @@ ncurses finder only after the input stream is complete.
 .RS
 e.g. \fBfzf --multi | fzf --sync\fR
 .RE
+.TP
+.B "--version"
+Display version information and exit
+
+.TP
+Note that most options have the opposite versions with \fB--no-\fR prefix.
 
 .SH ENVIRONMENT VARIABLES
 .TP
@@ -416,6 +445,8 @@ e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
 
 .B AVAILABLE KEYS:    (SYNONYMS)
     \fIctrl-[a-z]\fR
+    \fIctrl-space\fR
+    \fIctrl-alt-[a-z]\fR
     \fIalt-[a-z]\fR
     \fIalt-[0-9]\fR
     \fIf[1-12]\fR
@@ -443,6 +474,11 @@ e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
     \fIdouble-click\fR
     or any single character
 
+Additionally, a special event named \fIchange\fR is available which is
+triggered whenever the query string is changed.
+
+    e.g. \fBfzf --bind change:top\fR
+
   \fBACTION:               DEFAULT BINDINGS (NOTES):
     \fBabort\fR                 \fIctrl-c  ctrl-g  ctrl-q  esc\fR
     \fBaccept\fR                \fIenter   double-click\fR
@@ -459,7 +495,8 @@ e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
     \fBdown\fR                  \fIctrl-j  ctrl-n  down\fR
     \fBend-of-line\fR           \fIctrl-e  end\fR
     \fBexecute(...)\fR          (see below for the details)
-    \fBexecute-multi(...)\fR    (see below for the details)
+    \fBexecute-silent(...)\fR   (see below for the details)
+    \fRexecute-multi(...)\fR    (deprecated in favor of \fB{+}\fR expression)
     \fBforward-char\fR          \fIctrl-f  right\fR
     \fBforward-word\fR          \fIalt-f   shift-right\fR
     \fBignore\fR
@@ -481,16 +518,22 @@ e.g. \fBfzf --bind=ctrl-j:accept,ctrl-k:kill-line\fR
     \fBselect-all\fR
     \fBtoggle\fR
     \fBtoggle-all\fR
-    \fBtoggle-down\fR           \fIctrl-i  (tab)\fR
-    \fBtoggle-in\fR             (\fB--reverse\fR ? \fBtoggle-up\fR : \fBtoggle-down\fR)
-    \fBtoggle-out\fR            (\fB--reverse\fR ? \fBtoggle-down\fR : \fBtoggle-up\fR)
+    \fBtoggle+down\fR           \fIctrl-i  (tab)\fR
+    \fBtoggle-in\fR             (\fB--reverse\fR ? \fBtoggle+up\fR : \fBtoggle+down\fR)
+    \fBtoggle-out\fR            (\fB--reverse\fR ? \fBtoggle+down\fR : \fBtoggle+up\fR)
     \fBtoggle-preview\fR
-    \fBtoggle-sort\fR           (equivalent to \fB--toggle-sort\fR)
-    \fBtoggle-up\fR             \fIbtab    (shift-tab)\fR
+    \fBtoggle-preview-wrap\fR
+    \fBtoggle-sort\fR
+    \fBtoggle+up\fR             \fIbtab    (shift-tab)\fR
+    \fBtop\fR                   (move to the top result)
     \fBunix-line-discard\fR     \fIctrl-u\fR
     \fBunix-word-rubout\fR      \fIctrl-w\fR
     \fBup\fR                    \fIctrl-k  ctrl-p  up\fR
     \fByank\fR                  \fIctrl-y\fR
+
+Multiple actions can be chained using \fB+\fR separator.
+
+    \fBfzf --bind 'ctrl-a:select-all+accept'\fR
 
 With \fBexecute(...)\fR action, you can execute arbitrary commands without
 leaving fzf. For example, you can turn fzf into a simple file browser by
@@ -524,10 +567,12 @@ the closing character. The catch is that it should be the last one in the
 comma-separated list of key-action pairs.
 .RE
 
-\fBexecute-multi(...)\fR is an alternative action that executes the command
-with the selected entries when multi-select is enabled (\fB--multi\fR). With
-this action, \fB{}\fR is replaced with the quoted strings of the selected
-entries separated by spaces.
+fzf switches to the alternate screen when executing a command. However, if the
+command is expected to complete quickly, and you are not interested in its
+output, you might want to use \fBexecute-silent\fR instead, which silently
+executes the command without the switching. Note that fzf will not be
+responsible until the command is complete. For asynchronous execution, start
+your command as a background process (i.e. appending \fB&\fR).
 
 .SH AUTHOR
 Junegunn Choi (\fIjunegunn.c@gmail.com\fR)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,15 +20,20 @@ const (
 	defaultWidth  = 80
 	defaultHeight = 24
 
+	defaultEscDelay = 100
 	escPollInterval = 5
+	offsetPollTries = 10
 )
 
 const consoleDevice string = "/dev/tty"
 
+var offsetRegexp *regexp.Regexp = regexp.MustCompile("\x1b\\[([0-9]+);([0-9]+)R")
+
 func openTtyIn() *os.File {
 	in, err := os.OpenFile(consoleDevice, syscall.O_RDONLY, 0)
 	if err != nil {
-		panic("Failed to open " + consoleDevice)
+		fmt.Fprintln(os.Stderr, "Failed to open "+consoleDevice)
+		os.Exit(2)
 	}
 	return in
 }
@@ -69,6 +75,7 @@ type LightRenderer struct {
 	theme         *ColorTheme
 	mouse         bool
 	forceBlack    bool
+	clearOnExit   bool
 	prevDownTime  time.Time
 	clickY        []int
 	ttyin         *os.File
@@ -79,6 +86,7 @@ type LightRenderer struct {
 	yoffset       int
 	tabstop       int
 	escDelay      int
+	fullscreen    bool
 	upOneLine     bool
 	queued        string
 	y             int
@@ -89,7 +97,7 @@ type LightRenderer struct {
 type LightWindow struct {
 	renderer *LightRenderer
 	colored  bool
-	border   bool
+	border   BorderStyle
 	top      int
 	left     int
 	width    int
@@ -100,14 +108,16 @@ type LightWindow struct {
 	bg       Color
 }
 
-func NewLightRenderer(theme *ColorTheme, forceBlack bool, mouse bool, tabstop int, maxHeightFunc func(int) int) Renderer {
+func NewLightRenderer(theme *ColorTheme, forceBlack bool, mouse bool, tabstop int, clearOnExit bool, fullscreen bool, maxHeightFunc func(int) int) Renderer {
 	r := LightRenderer{
 		theme:         theme,
 		forceBlack:    forceBlack,
 		mouse:         mouse,
+		clearOnExit:   clearOnExit,
 		ttyin:         openTtyIn(),
-		yoffset:       -1,
+		yoffset:       0,
 		tabstop:       tabstop,
+		fullscreen:    fullscreen,
 		upOneLine:     false,
 		maxHeightFunc: maxHeightFunc}
 	return &r
@@ -131,18 +141,14 @@ func (r *LightRenderer) defaultTheme() *ColorTheme {
 func (r *LightRenderer) findOffset() (row int, col int) {
 	r.csi("6n")
 	r.flush()
-	bytes := r.getBytesInternal([]byte{})
-
-	// ^[[*;*R
-	if len(bytes) > 5 && bytes[0] == 27 && bytes[1] == 91 && bytes[len(bytes)-1] == 'R' {
-		nums := strings.Split(string(bytes[2:len(bytes)-1]), ";")
-		if len(nums) == 2 {
-			return atoi(nums[0], 0) - 1, atoi(nums[1], 0) - 1
+	bytes := []byte{}
+	for tries := 0; tries < offsetPollTries; tries++ {
+		bytes = r.getBytesInternal(bytes, tries > 0)
+		offsets := offsetRegexp.FindSubmatch(bytes)
+		if len(offsets) > 2 {
+			return atoi(string(offsets[1]), 0) - 1, atoi(string(offsets[2]), 0) - 1
 		}
-		return -1, -1
 	}
-
-	// No idea
 	return -1, -1
 }
 
@@ -162,15 +168,7 @@ func atoi(s string, defaultValue int) int {
 }
 
 func (r *LightRenderer) Init() {
-	delay := 100
-	delayEnv := os.Getenv("ESCDELAY")
-	if len(delayEnv) > 0 {
-		num, err := strconv.Atoi(delayEnv)
-		if err == nil && num >= 0 {
-			delay = num
-		}
-	}
-	r.escDelay = delay
+	r.escDelay = atoi(os.Getenv("ESCDELAY"), defaultEscDelay)
 
 	fd := r.fd()
 	origState, err := terminal.GetState(fd)
@@ -182,14 +180,27 @@ func (r *LightRenderer) Init() {
 	r.updateTerminalSize()
 	initTheme(r.theme, r.defaultTheme(), r.forceBlack)
 
-	_, x := r.findOffset()
-	if x > 0 {
-		r.upOneLine = true
-		r.stderr("\n")
-	}
-	for i := 1; i < r.MaxY(); i++ {
-		r.stderr("\n")
-		r.csi("G")
+	if r.fullscreen {
+		r.smcup()
+	} else {
+		// We assume that --no-clear is used for repetitive relaunching of fzf.
+		// So we do not clear the lower bottom of the screen.
+		if r.clearOnExit {
+			r.csi("J")
+		}
+		y, x := r.findOffset()
+		r.mouse = r.mouse && y >= 0
+		// When --no-clear is used for repetitive relaunching, there is a small
+		// time frame between fzf processes where the user keystrokes are not
+		// captured by either of fzf process which can cause x offset to be
+		// increased and we're left with unwanted extra new line.
+		if x > 0 && r.clearOnExit {
+			r.upOneLine = true
+			r.makeSpace()
+		}
+		for i := 1; i < r.MaxY(); i++ {
+			r.makeSpace()
+		}
 	}
 
 	if r.mouse {
@@ -197,10 +208,16 @@ func (r *LightRenderer) Init() {
 	}
 	r.csi(fmt.Sprintf("%dA", r.MaxY()-1))
 	r.csi("G")
-	// r.csi("s")
-	if r.mouse {
+	r.csi("K")
+	r.csi("s")
+	if !r.fullscreen && r.mouse {
 		r.yoffset, _ = r.findOffset()
 	}
+}
+
+func (r *LightRenderer) makeSpace() {
+	r.stderr("\n")
+	r.csi("G")
 }
 
 func (r *LightRenderer) move(y int, x int) {
@@ -243,8 +260,9 @@ func (r *LightRenderer) updateTerminalSize() {
 
 func (r *LightRenderer) getch(nonblock bool) (int, bool) {
 	b := make([]byte, 1)
+	fd := r.fd()
 	util.SetNonblock(r.ttyin, nonblock)
-	_, err := r.ttyin.Read(b)
+	_, err := util.Read(fd, b)
 	if err != nil {
 		return 0, false
 	}
@@ -252,18 +270,18 @@ func (r *LightRenderer) getch(nonblock bool) (int, bool) {
 }
 
 func (r *LightRenderer) getBytes() []byte {
-	return r.getBytesInternal(r.buffer)
+	return r.getBytesInternal(r.buffer, false)
 }
 
-func (r *LightRenderer) getBytesInternal(buffer []byte) []byte {
-	c, ok := r.getch(false)
-	if !ok {
+func (r *LightRenderer) getBytesInternal(buffer []byte, nonblock bool) []byte {
+	c, ok := r.getch(nonblock)
+	if !nonblock && !ok {
 		r.Close()
 		errorExit("Failed to read " + consoleDevice)
 	}
 
 	retries := 0
-	if c == ESC {
+	if c == ESC || nonblock {
 		retries = r.escDelay / escPollInterval
 	}
 	buffer = append(buffer, byte(c))
@@ -307,6 +325,8 @@ func (r *LightRenderer) GetChar() Event {
 		return Event{CtrlQ, 0, nil}
 	case 127:
 		return Event{BSpace, 0, nil}
+	case 0:
+		return Event{CtrlSpace, 0, nil}
 	case ESC:
 		ev := r.escSequence(&sz)
 		// Second chance
@@ -334,9 +354,10 @@ func (r *LightRenderer) escSequence(sz *int) Event {
 		return Event{ESC, 0, nil}
 	}
 	*sz = 2
+	if r.buffer[1] >= 1 && r.buffer[1] <= 'z'-'a'+1 {
+		return Event{int(CtrlAltA + r.buffer[1] - 1), 0, nil}
+	}
 	switch r.buffer[1] {
-	case 13:
-		return Event{AltEnter, 0, nil}
 	case 32:
 		return Event{AltSpace, 0, nil}
 	case 47:
@@ -399,10 +420,12 @@ func (r *LightRenderer) escSequence(sz *int) Event {
 						return Event{F12, 0, nil}
 					}
 				}
-				// Bracketed paste mode \e[200~ / \e[201
-				if r.buffer[3] == 48 && (r.buffer[4] == 48 || r.buffer[4] == 49) && r.buffer[5] == 126 {
-					*sz = 6
-					return Event{Invalid, 0, nil}
+				// Bracketed paste mode: \e[200~ ... \e[201~
+				if r.buffer[3] == '0' && (r.buffer[4] == '0' || r.buffer[4] == '1') && r.buffer[5] == '~' {
+					// Immediately discard the sequence from the buffer and reread input
+					r.buffer = r.buffer[6:]
+					*sz = 0
+					return r.GetChar()
 				}
 				return Event{Invalid, 0, nil} // INS
 			case 51:
@@ -464,7 +487,7 @@ func (r *LightRenderer) escSequence(sz *int) Event {
 }
 
 func (r *LightRenderer) mouseSequence(sz *int) Event {
-	if len(r.buffer) < 6 || r.yoffset < 0 {
+	if len(r.buffer) < 6 || !r.mouse {
 		return Event{Invalid, 0, nil}
 	}
 	*sz = 6
@@ -503,21 +526,49 @@ func (r *LightRenderer) mouseSequence(sz *int) Event {
 	return Event{Invalid, 0, nil}
 }
 
-func (r *LightRenderer) Pause() {
-	terminal.Restore(r.fd(), r.origState)
+func (r *LightRenderer) smcup() {
 	r.csi("?1049h")
-	r.flush()
 }
 
-func (r *LightRenderer) Resume() bool {
-	terminal.MakeRaw(r.fd())
+func (r *LightRenderer) rmcup() {
 	r.csi("?1049l")
-	r.flush()
-	// Should redraw
-	return true
+}
+
+func (r *LightRenderer) Pause(clear bool) {
+	terminal.Restore(r.fd(), r.origState)
+	if clear {
+		if r.fullscreen {
+			r.rmcup()
+		} else {
+			r.smcup()
+			r.csi("H")
+		}
+		r.flush()
+	}
+}
+
+func (r *LightRenderer) Resume(clear bool) {
+	terminal.MakeRaw(r.fd())
+	if clear {
+		if r.fullscreen {
+			r.smcup()
+		} else {
+			r.rmcup()
+		}
+		r.flush()
+	} else if !r.fullscreen && r.mouse {
+		// NOTE: Resume(false) is only called on SIGCONT after SIGSTOP.
+		// And It's highly likely that the offset we obtained at the beginning will
+		// no longer be correct, so we simply disable mouse input.
+		r.csi("?1000l")
+		r.mouse = false
+	}
 }
 
 func (r *LightRenderer) Clear() {
+	if r.fullscreen {
+		r.csi("H")
+	}
 	// r.csi("u")
 	r.origin()
 	r.csi("J")
@@ -534,13 +585,21 @@ func (r *LightRenderer) Refresh() {
 
 func (r *LightRenderer) Close() {
 	// r.csi("u")
-	r.origin()
-	r.csi("J")
+	if r.clearOnExit {
+		if r.fullscreen {
+			r.rmcup()
+		} else {
+			r.origin()
+			if r.upOneLine {
+				r.csi("A")
+			}
+			r.csi("J")
+		}
+	} else if !r.fullscreen {
+		r.csi("u")
+	}
 	if r.mouse {
 		r.csi("?1000l")
-	}
-	if r.upOneLine {
-		r.csi("A")
 	}
 	r.flush()
 	terminal.Restore(r.fd(), r.origState)
@@ -555,18 +614,18 @@ func (r *LightRenderer) MaxY() int {
 }
 
 func (r *LightRenderer) DoesAutoWrap() bool {
-	return true
+	return false
 }
 
 func (r *LightRenderer) IsOptimized() bool {
 	return false
 }
 
-func (r *LightRenderer) NewWindow(top int, left int, width int, height int, border bool) Window {
+func (r *LightRenderer) NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window {
 	w := &LightWindow{
 		renderer: r,
 		colored:  r.theme != nil,
-		border:   border,
+		border:   borderStyle,
 		top:      top,
 		left:     left,
 		width:    width,
@@ -576,13 +635,27 @@ func (r *LightRenderer) NewWindow(top int, left int, width int, height int, bord
 	if r.theme != nil {
 		w.bg = r.theme.Bg
 	}
-	if w.border {
-		w.drawBorder()
-	}
+	w.drawBorder()
 	return w
 }
 
 func (w *LightWindow) drawBorder() {
+	switch w.border {
+	case BorderAround:
+		w.drawBorderAround()
+	case BorderHorizontal:
+		w.drawBorderHorizontal()
+	}
+}
+
+func (w *LightWindow) drawBorderHorizontal() {
+	w.Move(0, 0)
+	w.CPrint(ColBorder, AttrRegular, repeat("─", w.width))
+	w.Move(w.height-1, 0)
+	w.CPrint(ColBorder, AttrRegular, repeat("─", w.width))
+}
+
+func (w *LightWindow) drawBorderAround() {
 	w.Move(0, 0)
 	w.CPrint(ColBorder, AttrRegular, "┌"+repeat("─", w.width-2)+"┐")
 	for y := 1; y < w.height-1; y++ {
@@ -631,6 +704,10 @@ func (w *LightWindow) Close() {
 
 func (w *LightWindow) X() int {
 	return w.posx
+}
+
+func (w *LightWindow) Y() int {
+	return w.posy
 }
 
 func (w *LightWindow) Enclose(y int, x int) bool {
@@ -710,13 +787,17 @@ func (w *LightWindow) Print(text string) {
 	w.cprint2(colDefault, w.bg, AttrRegular, text)
 }
 
+func cleanse(str string) string {
+	return strings.Replace(str, "\x1b", "?", -1)
+}
+
 func (w *LightWindow) CPrint(pair ColorPair, attr Attr, text string) {
 	if !w.colored {
 		w.csiColor(colDefault, colDefault, attrFor(pair, attr))
 	} else {
 		w.csiColor(pair.Fg(), pair.Bg(), attr)
 	}
-	w.stderrInternal(text, false)
+	w.stderrInternal(cleanse(text), false)
 	w.csi("m")
 }
 
@@ -724,7 +805,7 @@ func (w *LightWindow) cprint2(fg Color, bg Color, attr Attr, text string) {
 	if w.csiColor(fg, bg, attr) {
 		defer w.csi("m")
 	}
-	w.stderrInternal(text, false)
+	w.stderrInternal(cleanse(text), false)
 }
 
 type wrappedLine struct {
@@ -763,17 +844,20 @@ func (w *LightWindow) fill(str string, onMove func()) FillReturn {
 		for j, wl := range lines {
 			if w.posx >= w.Width()-1 && wl.displayWidth == 0 {
 				if w.posy < w.height-1 {
-					w.MoveAndClear(w.posy+1, 0)
+					w.Move(w.posy+1, 0)
 				}
 				return FillNextLine
 			}
 			w.stderrInternal(wl.text, false)
 			w.posx += wl.displayWidth
+
+			// Wrap line
 			if j < len(lines)-1 || i < len(allLines)-1 {
 				if w.posy+1 >= w.height {
 					return FillSuspend
 				}
-				w.MoveAndClear(w.posy+1, 0)
+				w.MoveAndClear(w.posy, w.posx)
+				w.Move(w.posy+1, 0)
 				onMove()
 			}
 		}
@@ -788,33 +872,32 @@ func (w *LightWindow) setBg() {
 }
 
 func (w *LightWindow) Fill(text string) FillReturn {
-	w.MoveAndClear(w.posy, w.posx)
+	w.Move(w.posy, w.posx)
 	w.setBg()
 	return w.fill(text, w.setBg)
 }
 
 func (w *LightWindow) CFill(fg Color, bg Color, attr Attr, text string) FillReturn {
-	w.MoveAndClear(w.posy, w.posx)
+	w.Move(w.posy, w.posx)
 	if bg == colDefault {
 		bg = w.bg
 	}
 	if w.csiColor(fg, bg, attr) {
-		return w.fill(text, func() { w.csiColor(fg, bg, attr) })
 		defer w.csi("m")
+		return w.fill(text, func() { w.csiColor(fg, bg, attr) })
 	}
 	return w.fill(text, w.setBg)
 }
 
 func (w *LightWindow) FinishFill() {
+	w.MoveAndClear(w.posy, w.posx)
 	for y := w.posy + 1; y < w.height; y++ {
 		w.MoveAndClear(y, 0)
 	}
 }
 
 func (w *LightWindow) Erase() {
-	if w.border {
-		w.drawBorder()
-	}
+	w.drawBorder()
 	// We don't erase the window here to avoid flickering during scroll
 	w.Move(0, 0)
 }

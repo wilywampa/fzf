@@ -1,6 +1,90 @@
 CHANGELOG
 =========
 
+0.16.11
+-------
+- Performance optimization
+- Fixed missing preview update
+
+0.16.10
+-------
+- Fixed invalid handling of ANSI colors in preview window
+- Further improved `--ansi` performance
+
+0.16.9
+------
+- Memory and performance optimization
+    - Around 20% performance improvement for general use cases
+    - Up to 5x faster processing of `--ansi`
+    - Up to 50% reduction of memory usage
+- Bug fixes and usability improvements
+    - Fixed handling of bracketed paste mode
+    - [ERROR] on info line when the default command failed
+    - More efficient rendering of preview window
+    - `--no-clear` updated for repetitive relaunching scenarios
+
+0.16.8
+------
+- New `change` event and `top` action for `--bind`
+    - `fzf --bind change:top`
+        - Move cursor to the top result whenever the query string is changed
+    - `fzf --bind 'ctrl-w:unix-word-rubout+top,ctrl-u:unix-line-discard+top'`
+        - `top` combined with `unix-word-rubout` and `unix-line-discard`
+- Fixed inconsistent tiebreak scores when `--nth` is used
+- Proper display of tab characters in `--prompt`
+- Fixed not to `--cycle` on page-up/page-down to prevent overshoot
+- Git revision in `--version` output
+- Basic support for Cygwin environment
+- Many fixes in Vim plugin on Windows/Cygwin (thanks to @janlazo)
+
+0.16.7
+------
+- Added support for `ctrl-alt-[a-z]` key chords
+- CTRL-Z (SIGSTOP) now works with fzf
+- fzf will export `$FZF_PREVIEW_WINDOW` so that the scripts can use it
+- Bug fixes and improvements in Vim plugin and shell extensions
+
+0.16.6
+------
+- Minor bug fixes and improvements
+- Added `--no-clear` option for scripting purposes
+
+0.16.5
+------
+- Minor bug fixes
+- Added `toggle-preview-wrap` action
+- Built with Go 1.8
+
+0.16.4
+------
+- Added `--border` option to draw border above and below the finder
+- Bug fixes and improvements
+
+0.16.3
+------
+- Fixed a bug where fzf incorrectly display the lines when straddling tab
+  characters are trimmed
+- Placeholder expression used in `--preview` and `execute` action can
+  optionally take `+` flag to be used with multiple selections
+    - e.g. `git log --oneline | fzf --multi --preview 'git show {+1}'`
+- Added `execute-silent` action for executing a command silently without
+  switching to the alternate screen. This is useful when the process is
+  short-lived and you're not interested in its output.
+    - e.g. `fzf --bind 'ctrl-y:execute!(echo -n {} | pbcopy)'`
+- `ctrl-space` is allowed in `--bind`
+
+0.16.2
+------
+- Dropped ncurses dependency
+- Binaries for freebsd, openbsd, arm5, arm6, arm7, and arm8
+- Official 24-bit color support
+- Added support for composite actions in `--bind`. Multiple actions can be
+  chained using `+` separator.
+    - e.g. `fzf --bind 'ctrl-y:execute(echo -n {} | pbcopy)+abort'`
+- `--preview-window` with size 0 is allowed. This is used to make fzf execute
+  preview command in the background without displaying the result.
+- Minor bug fixes and improvements
+
 0.16.1
 ------
 - Fixed `--height` option to properly fill the window with the background

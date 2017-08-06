@@ -3,7 +3,7 @@ Package fzf implements fzf, a command-line fuzzy finder.
 
 The MIT License (MIT)
 
-Copyright (c) 2016 Junegunn Choi
+Copyright (c) 2017 Junegunn Choi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -43,12 +43,16 @@ Matcher  -> EvtHeader         -> Terminal (update header)
 */
 
 // Run starts fzf
-func Run(opts *Options) {
+func Run(opts *Options, revision string) {
 	sort := opts.Sort > 0
 	sortCriteria = opts.Criteria
 
 	if opts.Version {
-		fmt.Println(version)
+		if len(revision) > 0 {
+			fmt.Printf("%s (%s)\n", version, revision)
+		} else {
+			fmt.Println(version)
+		}
 		os.Exit(exitOk)
 	}
 
@@ -59,27 +63,21 @@ func Run(opts *Options) {
 	ansiProcessor := func(data []byte) (util.Chars, *[]ansiOffset) {
 		return util.ToChars(data), nil
 	}
-	ansiProcessorRunes := func(data []rune) (util.Chars, *[]ansiOffset) {
-		return util.RunesToChars(data), nil
-	}
 	if opts.Ansi {
 		if opts.Theme != nil {
 			var state *ansiState
 			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
 				trimmed, offsets, newState := extractColor(string(data), state, nil)
 				state = newState
-				return util.RunesToChars([]rune(trimmed)), offsets
+				return util.ToChars([]byte(trimmed)), offsets
 			}
 		} else {
 			// When color is disabled but ansi option is given,
 			// we simply strip out ANSI codes from the input
 			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
 				trimmed, _, _ := extractColor(string(data), nil, nil)
-				return util.RunesToChars([]rune(trimmed)), nil
+				return util.ToChars([]byte(trimmed)), nil
 			}
-		}
-		ansiProcessorRunes = func(data []rune) (util.Chars, *[]ansiOffset) {
-			return ansiProcessor([]byte(string(data)))
 		}
 	}
 
@@ -87,37 +85,29 @@ func Run(opts *Options) {
 	var chunkList *ChunkList
 	header := make([]string, 0, opts.HeaderLines)
 	if len(opts.WithNth) == 0 {
-		chunkList = NewChunkList(func(data []byte, index int) *Item {
+		chunkList = NewChunkList(func(data []byte, index int) Item {
 			if len(header) < opts.HeaderLines {
 				header = append(header, string(data))
 				eventBox.Set(EvtHeader, header)
-				return nil
+				return nilItem
 			}
 			chars, colors := ansiProcessor(data)
-			return &Item{
-				index:  int32(index),
-				text:   chars,
-				colors: colors}
+			chars.Index = int32(index)
+			return Item{text: chars, colors: colors}
 		})
 	} else {
-		chunkList = NewChunkList(func(data []byte, index int) *Item {
-			tokens := Tokenize(util.ToChars(data), opts.Delimiter)
+		chunkList = NewChunkList(func(data []byte, index int) Item {
+			tokens := Tokenize(string(data), opts.Delimiter)
 			trans := Transform(tokens, opts.WithNth)
+			transformed := joinTokens(trans)
 			if len(header) < opts.HeaderLines {
-				header = append(header, string(joinTokens(trans)))
+				header = append(header, transformed)
 				eventBox.Set(EvtHeader, header)
-				return nil
+				return nilItem
 			}
-			textRunes := joinTokens(trans)
-			item := Item{
-				index:    int32(index),
-				origText: &data,
-				colors:   nil}
-
-			trimmed, colors := ansiProcessorRunes(textRunes)
-			item.text = trimmed
-			item.colors = colors
-			return &item
+			trimmed, colors := ansiProcessor([]byte(transformed))
+			trimmed.Index = int32(index)
+			return Item{text: trimmed, colors: colors, origText: &data}
 		})
 	}
 
@@ -162,8 +152,8 @@ func Run(opts *Options) {
 			reader := Reader{
 				func(runes []byte) bool {
 					item := chunkList.trans(runes, 0)
-					if item != nil {
-						if result, _, _ := pattern.MatchItem(item, false, slab); result != nil {
+					if !item.Nil() {
+						if result, _, _ := pattern.MatchItem(&item, false, slab); result != nil {
 							opts.Printer(item.text.ToString())
 							found = true
 						}
@@ -215,14 +205,13 @@ func Run(opts *Options) {
 		delay := true
 		ticks++
 		eventBox.Wait(func(events *util.Events) {
-			defer events.Clear()
 			for evt, value := range *events {
 				switch evt {
 
 				case EvtReadNew, EvtReadFin:
 					reading = reading && evt == EvtReadNew
 					snapshot, count := chunkList.Snapshot()
-					terminal.UpdateCount(count, !reading)
+					terminal.UpdateCount(count, !reading, value.(bool))
 					matcher.Reset(snapshot, terminal.Input(), false, !reading, sort)
 
 				case EvtSearchNew:
@@ -275,6 +264,7 @@ func Run(opts *Options) {
 					}
 				}
 			}
+			events.Clear()
 		})
 		if delay && reading {
 			dur := util.DurWithin(
