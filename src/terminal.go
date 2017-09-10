@@ -281,9 +281,13 @@ func defaultKeymap() map[int][]action {
 	return keymap
 }
 
+func trimQuery(query string) []rune {
+	return []rune(strings.Replace(query, "\t", " ", -1))
+}
+
 // NewTerminal returns new Terminal object
 func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
-	input := []rune(opts.Query)
+	input := trimQuery(opts.Query)
 	var header []string
 	if opts.Reverse {
 		header = opts.Header
@@ -619,10 +623,8 @@ func (t *Terminal) resizeWindows() {
 			width,
 			height, tui.BorderNone)
 	}
-	if !t.tui.IsOptimized() {
-		for i := 0; i < t.window.Height(); i++ {
-			t.window.MoveAndClear(i, 0)
-		}
+	for i := 0; i < t.window.Height(); i++ {
+		t.window.MoveAndClear(i, 0)
 	}
 	t.truncateQuery()
 }
@@ -718,7 +720,7 @@ func (t *Terminal) printHeader() {
 
 		t.move(line, 2, true)
 		t.printHighlighted(Result{item: item},
-			tui.AttrRegular, tui.ColHeader, tui.ColDefault, false, false)
+			tui.AttrRegular, tui.ColHeader, tui.ColHeader, false, false)
 	}
 }
 
@@ -771,8 +773,7 @@ func (t *Terminal) printItem(result Result, line int, i int, current bool) {
 		return
 	}
 
-	// Optimized renderer can simply erase to the end of the window
-	t.move(line, 0, t.tui.IsOptimized())
+	t.move(line, 0, false)
 	t.window.CPrint(tui.ColCursor, t.strong, label)
 	if current {
 		if selected {
@@ -789,11 +790,9 @@ func (t *Terminal) printItem(result Result, line int, i int, current bool) {
 		}
 		newLine.width = t.printHighlighted(result, 0, tui.ColNormal, tui.ColMatch, false, true)
 	}
-	if !t.tui.IsOptimized() {
-		fillSpaces := prevLine.width - newLine.width
-		if fillSpaces > 0 {
-			t.window.Print(strings.Repeat(" ", fillSpaces))
-		}
+	fillSpaces := prevLine.width - newLine.width
+	if fillSpaces > 0 {
+		t.window.Print(strings.Repeat(" ", fillSpaces))
 	}
 	t.prevLines[i] = newLine
 }
@@ -986,7 +985,7 @@ func (t *Terminal) printPreview() {
 				if t.theme != nil && ansi != nil && ansi.colored() {
 					fillRet = t.pwindow.CFill(ansi.fg, ansi.bg, ansi.attr, str)
 				} else {
-					fillRet = t.pwindow.Fill(str)
+					fillRet = t.pwindow.CFill(tui.ColNormal.Fg(), tui.ColNormal.Bg(), tui.AttrRegular, str)
 				}
 				return fillRet == tui.FillContinue
 			})
@@ -1694,13 +1693,13 @@ func (t *Terminal) Loop() {
 			case actPreviousHistory:
 				if t.history != nil {
 					t.history.override(string(t.input))
-					t.input = []rune(t.history.previous())
+					t.input = trimQuery(t.history.previous())
 					t.cx = len(t.input)
 				}
 			case actNextHistory:
 				if t.history != nil {
 					t.history.override(string(t.input))
-					t.input = []rune(t.history.next())
+					t.input = trimQuery(t.history.next())
 					t.cx = len(t.input)
 				}
 			case actSigStop:

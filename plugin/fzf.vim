@@ -35,6 +35,8 @@ else
   let s:base_dir = expand('<sfile>:h:h')
 endif
 if s:is_win
+  let s:term_marker = '&::FZF'
+
   function! s:fzf_call(fn, ...)
     let shellslash = &shellslash
     try
@@ -53,6 +55,8 @@ if s:is_win
           \ ['chcp %origchcp% > nul']
   endfunction
 else
+  let s:term_marker = ";#FZF"
+
   function! s:fzf_call(fn, ...)
     return call(a:fn, a:000)
   endfunction
@@ -66,8 +70,8 @@ function! s:shellesc_cmd(arg)
   let escaped = substitute(a:arg, '[&|<>()@^]', '^&', 'g')
   let escaped = substitute(escaped, '%', '%%', 'g')
   let escaped = substitute(escaped, '"', '\\^&', 'g')
-  let escaped = substitute(escaped, '\\\+\(\\^\)', '\\\\\1', 'g')
-  return '^"'.substitute(escaped, '[^\\]\zs\\$', '\\\\', '').'^"'
+  let escaped = substitute(escaped, '\(\\\+\)\(\\^\)', '\1\1\2', 'g')
+  return '^"'.substitute(escaped, '\(\\\+\)$', '\1\1', '').'^"'
 endfunction
 
 function! fzf#shellescape(arg, ...)
@@ -201,7 +205,10 @@ function! s:common_sink(action, lines) abort
     return
   endif
   let key = remove(a:lines, 0)
-  let cmd = get(a:action, key, 'e')
+  let Cmd = get(a:action, key, 'e')
+  if type(Cmd) == type(function('call'))
+    return Cmd(a:lines)
+  endif
   if len(a:lines) > 1
     augroup fzf_swap
       autocmd SwapExists * let v:swapchoice='o'
@@ -217,7 +224,7 @@ function! s:common_sink(action, lines) abort
         execute 'e' s:escape(item)
         let empty = 0
       else
-        call s:open(cmd, item)
+        call s:open(Cmd, item)
       endif
       if !has('patch-8.0.0177') && !has('nvim-0.2') && exists('#BufEnter')
             \ && isdirectory(item)
@@ -325,25 +332,21 @@ function! fzf#wrap(...)
   return opts
 endfunction
 
-function! fzf#run(...) abort
-try
-  let oshell = &shell
-  let useshellslash = &shellslash
-
+function! s:use_sh()
+  let [shell, shellslash] = [&shell, &shellslash]
   if s:is_win
     set shell=cmd.exe
     set noshellslash
   else
     set shell=sh
   endif
+  return [shell, shellslash]
+endfunction
 
-  if has('nvim')
-    let running = filter(range(1, bufnr('$')), "bufname(v:val) =~# ';#FZF'")
-    if len(running)
-      call s:warn('FZF is already running (in buffer '.join(running, ', ').')!')
-      return []
-    endif
-  endif
+function! fzf#run(...) abort
+try
+  let [shell, shellslash] = s:use_sh()
+
   let dict   = exists('a:1') ? s:upgrade(a:1) : {}
   let temps  = { 'result': s:fzf_tempname() }
   let optstr = s:evaluate_opts(get(dict, 'options', ''))
@@ -370,7 +373,7 @@ try
     let source = dict.source
     let type = type(source)
     if type == 1
-      let prefix = source.'|'
+      let prefix = '( '.source.' )|'
     elseif type == 3
       let temps.input = s:fzf_tempname()
       call writefile(source, temps.input)
@@ -386,7 +389,7 @@ try
   let use_height = has_key(dict, 'down') &&
         \ !(has('nvim') || s:is_win || has('win32unix') || s:present(dict, 'up', 'left', 'right')) &&
         \ executable('tput') && filereadable('/dev/tty')
-  let use_term = has('nvim') && !s:is_win
+  let use_term = has('nvim-0.2.1') || (has('nvim') && !s:is_win) || (has('terminal') && has('patch-8.0.995') && (has('gui_running') || s:is_win))
   let use_tmux = (!use_height && !use_term || prefer_tmux) && !has('win32unix') && s:tmux_enabled() && s:splittable(dict)
   if prefer_tmux && use_tmux
     let use_height = 0
@@ -397,6 +400,9 @@ try
     let optstr .= ' --height='.height
   elseif use_term
     let optstr .= ' --no-height'
+    if !has('nvim') && !s:is_win
+      let optstr .= ' --bind ctrl-j:accept'
+    endif
   endif
   let command = prefix.(use_tmux ? s:fzf_tmux(dict) : fzf_exec).' '.optstr.' > '.temps.result
 
@@ -409,8 +415,7 @@ try
   call s:callback(dict, lines)
   return lines
 finally
-  let &shell = oshell
-  let &shellslash = useshellslash
+  let [&shell, &shellslash] = [shell, shellslash]
 endtry
 endfunction
 
@@ -466,11 +471,11 @@ augroup fzf_popd
 augroup END
 
 function! s:dopopd()
-  if !exists('w:fzf_prev_dir') || exists('*haslocaldir') && !haslocaldir()
+  if !exists('w:fzf_dir') || s:fzf_getcwd() != w:fzf_dir[1]
     return
   endif
-  execute 'lcd' s:escape(w:fzf_prev_dir)
-  unlet w:fzf_prev_dir
+  execute 'lcd' s:escape(w:fzf_dir[0])
+  unlet w:fzf_dir
 endfunction
 
 function! s:xterm_launcher()
@@ -629,6 +634,7 @@ function! s:execute_term(dict, command, temps) abort
   let winrest = winrestcmd()
   let pbuf = bufnr('')
   let [ppos, winopts] = s:split(a:dict)
+  call s:use_sh()
   let b:fzf = a:dict
   let fzf = { 'buf': bufnr(''), 'pbuf': pbuf, 'ppos': ppos, 'dict': a:dict, 'temps': a:temps,
             \ 'winopts': winopts, 'winrest': winrest, 'lines': &lines,
@@ -644,7 +650,7 @@ function! s:execute_term(dict, command, temps) abort
       endif
     endif
   endfunction
-  function! fzf.on_exit(id, code, _event)
+  function! fzf.on_exit(id, code, ...)
     if s:getpos() == self.ppos " {'window': 'enew'}
       for [opt, val] in items(self.winopts)
         execute 'let' opt '=' val
@@ -682,7 +688,19 @@ function! s:execute_term(dict, command, temps) abort
     if s:present(a:dict, 'dir')
       execute 'lcd' s:escape(a:dict.dir)
     endif
-    call termopen(a:command . ';#FZF', fzf)
+    if s:is_win
+      let fzf.temps.batchfile = s:fzf_tempname().'.bat'
+      call writefile(s:wrap_cmds(a:command), fzf.temps.batchfile)
+      let command = fzf.temps.batchfile
+    else
+      let command = a:command
+    endif
+    let command .= s:term_marker
+    if has('nvim')
+      call termopen(command, fzf)
+    else
+      call term_start([&shell, &shellcmdflag, command], {'curwin': fzf.buf, 'exit_cb': function(fzf.on_exit)})
+    endif
   finally
     if s:present(a:dict, 'dir')
       lcd -
@@ -719,7 +737,7 @@ function! s:callback(dict, lines) abort
   let popd = has_key(a:dict, 'prev_dir') &&
         \ (!&autochdir || (empty(a:lines) || len(a:lines) == 1 && empty(a:lines[0])))
   if popd
-    let w:fzf_prev_dir = a:dict.prev_dir
+    let w:fzf_dir = [a:dict.prev_dir, a:dict.dir]
   endif
 
   try
@@ -743,7 +761,7 @@ function! s:callback(dict, lines) abort
 
   " We may have opened a new window or tab
   if popd
-    let w:fzf_prev_dir = a:dict.prev_dir
+    let w:fzf_dir = [a:dict.prev_dir, a:dict.dir]
     call s:dopopd()
   endif
 endfunction
@@ -754,7 +772,10 @@ let s:default_action = {
   \ 'ctrl-v': 'vsplit' }
 
 function! s:shortpath()
-  let short = pathshorten(fnamemodify(getcwd(), ':~:.'))
+  let short = fnamemodify(getcwd(), ':~:.')
+  if !has('win32unix')
+    let short = pathshorten(short)
+  endif
   let slash = (s:is_win && !&shellslash) ? '\' : '/'
   return empty(short) ? '~'.slash : short . (short =~ escape(slash, '\').'$' ? '' : slash)
 endfunction
@@ -771,6 +792,7 @@ function! s:cmd(bang, ...) abort
   else
     let prompt = s:shortpath()
   endif
+  let prompt = strwidth(prompt) < &columns - 20 ? prompt : '> '
   call extend(opts.options, ['--prompt', prompt])
   call extend(opts.options, args)
   call fzf#run(fzf#wrap('FZF', opts, a:bang))

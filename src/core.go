@@ -83,40 +83,44 @@ func Run(opts *Options, revision string) {
 
 	// Chunk list
 	var chunkList *ChunkList
+	var itemIndex int32
 	header := make([]string, 0, opts.HeaderLines)
 	if len(opts.WithNth) == 0 {
-		chunkList = NewChunkList(func(data []byte, index int) Item {
+		chunkList = NewChunkList(func(item *Item, data []byte) bool {
 			if len(header) < opts.HeaderLines {
 				header = append(header, string(data))
 				eventBox.Set(EvtHeader, header)
-				return nilItem
+				return false
 			}
-			chars, colors := ansiProcessor(data)
-			chars.Index = int32(index)
-			return Item{text: chars, colors: colors}
+			item.text, item.colors = ansiProcessor(data)
+			item.text.Index = itemIndex
+			itemIndex++
+			return true
 		})
 	} else {
-		chunkList = NewChunkList(func(data []byte, index int) Item {
+		chunkList = NewChunkList(func(item *Item, data []byte) bool {
 			tokens := Tokenize(string(data), opts.Delimiter)
 			trans := Transform(tokens, opts.WithNth)
 			transformed := joinTokens(trans)
 			if len(header) < opts.HeaderLines {
 				header = append(header, transformed)
 				eventBox.Set(EvtHeader, header)
-				return nilItem
+				return false
 			}
-			trimmed, colors := ansiProcessor([]byte(transformed))
-			trimmed.Index = int32(index)
-			return Item{text: trimmed, colors: colors, origText: &data}
+			item.text, item.colors = ansiProcessor([]byte(transformed))
+			item.text.Index = itemIndex
+			item.origText = &data
+			itemIndex++
+			return true
 		})
 	}
 
 	// Reader
 	streamingFilter := opts.Filter != nil && !sort && !opts.Tac && !opts.Sync
 	if !streamingFilter {
-		reader := Reader{func(data []byte) bool {
+		reader := NewReader(func(data []byte) bool {
 			return chunkList.Push(data)
-		}, eventBox, opts.ReadZero}
+		}, eventBox, opts.ReadZero)
 		go reader.ReadSource()
 	}
 
@@ -149,17 +153,17 @@ func Run(opts *Options, revision string) {
 		found := false
 		if streamingFilter {
 			slab := util.MakeSlab(slab16Size, slab32Size)
-			reader := Reader{
+			reader := NewReader(
 				func(runes []byte) bool {
-					item := chunkList.trans(runes, 0)
-					if !item.Nil() {
+					item := Item{}
+					if chunkList.trans(&item, runes) {
 						if result, _, _ := pattern.MatchItem(&item, false, slab); result != nil {
 							opts.Printer(item.text.ToString())
 							found = true
 						}
 					}
 					return false
-				}, eventBox, opts.ReadZero}
+				}, eventBox, opts.ReadZero)
 			reader.ReadSource()
 		} else {
 			eventBox.Unwatch(EvtReadNew)
@@ -205,6 +209,9 @@ func Run(opts *Options, revision string) {
 		delay := true
 		ticks++
 		eventBox.Wait(func(events *util.Events) {
+			if _, fin := (*events)[EvtReadFin]; fin {
+				delete(*events, EvtReadNew)
+			}
 			for evt, value := range *events {
 				switch evt {
 
@@ -212,6 +219,9 @@ func Run(opts *Options, revision string) {
 					reading = reading && evt == EvtReadNew
 					snapshot, count := chunkList.Snapshot()
 					terminal.UpdateCount(count, !reading, value.(bool))
+					if opts.Sync {
+						terminal.UpdateList(PassMerger(&snapshot, opts.Tac))
+					}
 					matcher.Reset(snapshot, terminal.Input(), false, !reading, sort)
 
 				case EvtSearchNew:

@@ -55,6 +55,19 @@ let g:fzf_action = {
   \ 'ctrl-x': 'split',
   \ 'ctrl-v': 'vsplit' }
 
+" An action can be a reference to a function that processes selected lines
+function! s:build_quickfix_list(lines)
+  call setqflist(map(copy(a:lines), '{ "filename": v:val }'))
+  copen
+  cc
+endfunction
+
+let g:fzf_action = {
+  \ 'ctrl-q': function('s:build_quickfix_list'),
+  \ 'ctrl-t': 'tab split',
+  \ 'ctrl-x': 'split',
+  \ 'ctrl-v': 'vsplit' }
+
 " Default fzf layout
 " - down / up / left / right
 let g:fzf_layout = { 'down': '~40%' }
@@ -73,6 +86,7 @@ let g:fzf_colors =
   \ 'bg+':     ['bg', 'CursorLine', 'CursorColumn'],
   \ 'hl+':     ['fg', 'Statement'],
   \ 'info':    ['fg', 'PreProc'],
+  \ 'border':  ['fg', 'Ignore'],
   \ 'prompt':  ['fg', 'Conditional'],
   \ 'pointer': ['fg', 'Exception'],
   \ 'marker':  ['fg', 'Keyword'],
@@ -131,8 +145,13 @@ command! -bang MyStuff
 GVim
 ----
 
-In GVim, you need an external terminal emulator to start fzf with. `xterm`
-command is used by default, but you can customize it with `g:fzf_launcher`.
+With the latest version of GVim, fzf will start inside the builtin terminal
+emulator of Vim. Please note that this terminal feature of Vim is still young
+and unstable and you may run into some issues.
+
+If you have an older version of GVim, you need an external terminal emulator
+to start fzf with. `xterm` command is used by default, but you can customize
+it with `g:fzf_launcher`.
 
 ```vim
 " This is the default. %s is replaced with fzf command

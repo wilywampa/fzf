@@ -719,6 +719,38 @@ class TestGoFZF < TestBase
     tmux.send_keys :Enter
   end
 
+  def test_invalid_cache_query_type
+    command = %[(echo 'foo\\$bar'; echo 'barfoo'; echo 'foo^bar'; echo \\"foo'1-2\\"; seq 100) | #{fzf}]
+
+    # Suffix match
+    tmux.send_keys command, :Enter
+    tmux.until { |lines| lines.match_count == 104 }
+    tmux.send_keys 'foo$'
+    tmux.until { |lines| lines.match_count == 1 }
+    tmux.send_keys 'bar'
+    tmux.until { |lines| lines.match_count == 1 }
+    tmux.send_keys :Enter
+
+    # Prefix match
+    tmux.prepare
+    tmux.send_keys command, :Enter
+    tmux.until { |lines| lines.match_count == 104 }
+    tmux.send_keys '^bar'
+    tmux.until { |lines| lines.match_count == 1 }
+    tmux.send_keys 'C-a', 'foo'
+    tmux.until { |lines| lines.match_count == 1 }
+    tmux.send_keys :Enter
+
+    # Exact match
+    tmux.prepare
+    tmux.send_keys command, :Enter
+    tmux.until { |lines| lines.match_count == 104 }
+    tmux.send_keys "'12"
+    tmux.until { |lines| lines.match_count == 1 }
+    tmux.send_keys 'C-a', 'foo'
+    tmux.until { |lines| lines.match_count == 1 }
+  end
+
   def test_smart_case_for_each_term
     assert_equal 1, `echo Foo bar | #{FZF} -x -f "foo Fbar" | wc -l`.to_i
   end
@@ -1345,6 +1377,24 @@ class TestGoFZF < TestBase
     tmux.until { |lines| lines.any? { |line| line.include? '1 2 3 4 5' } }
     tmux.send_keys 'a'
     tmux.until { |lines| lines.none? { |line| line.include? '1 2 3 4 5' } }
+  end
+
+  def test_escaped_meta_characters
+    input = <<~EOF
+      foo^bar
+      foo$bar
+      foo!bar
+      foo'bar
+      foo bar
+      bar foo
+    EOF
+    writelines tempname, input.lines.map(&:chomp)
+
+    assert_equal input.lines.count, `#{FZF} -f'foo bar' < #{tempname}`.lines.count
+    assert_equal input.lines.count - 1, `#{FZF} -f'^foo bar$' < #{tempname}`.lines.count
+    assert_equal ['foo bar'], `#{FZF} -f'foo\\ bar' < #{tempname}`.lines.map(&:chomp)
+    assert_equal ['foo bar'], `#{FZF} -f'^foo\\ bar$' < #{tempname}`.lines.map(&:chomp)
+    assert_equal input.lines.count - 1, `#{FZF} -f'!^foo\\ bar$' < #{tempname}`.lines.count
   end
 end
 

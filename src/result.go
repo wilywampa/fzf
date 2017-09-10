@@ -70,7 +70,7 @@ func buildResult(item *Item, offsets []Offset, score int) Result {
 				}
 			}
 		}
-		result.points[idx] = val
+		result.points[3-idx] = val
 	}
 
 	return result
@@ -85,7 +85,7 @@ func (result *Result) Index() int32 {
 }
 
 func minRank() Result {
-	return Result{item: &nilItem, points: [4]uint16{math.MaxUint16, 0, 0, 0}}
+	return Result{item: &minItem, points: [4]uint16{math.MaxUint16, 0, 0, 0}}
 }
 
 func (result *Result) colorOffsets(matchOffsets []Offset, theme *tui.ColorTheme, color tui.ColorPair, attr tui.Attr, current bool) []colorOffset {
@@ -223,17 +223,4 @@ func (a ByRelevanceTac) Swap(i, j int) {
 
 func (a ByRelevanceTac) Less(i, j int) bool {
 	return compareRanks(a[i], a[j], true)
-}
-
-func compareRanks(irank Result, jrank Result, tac bool) bool {
-	for idx := 0; idx < 4; idx++ {
-		left := irank.points[idx]
-		right := jrank.points[idx]
-		if left < right {
-			return true
-		} else if left > right {
-			return false
-		}
-	}
-	return (irank.item.Index() <= jrank.item.Index()) != tac
 }

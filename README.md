@@ -24,7 +24,7 @@ Table of Contents
 
    * [Installation](#installation)
       * [Using git](#using-git)
-      * [Using Homebrew](#using-homebrew)
+      * [Using Homebrew or Linuxbrew](#using-homebrew-or-linuxbrew)
       * [As Vim plugin](#as-vim-plugin)
       * [Windows](#windows)
    * [Upgrading fzf](#upgrading-fzf)
@@ -83,9 +83,10 @@ git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
 ~/.fzf/install
 ```
 
-### Using Homebrew
+### Using Homebrew or Linuxbrew
 
-On OS X, you can use [Homebrew](http://brew.sh/) to install fzf.
+Alternatively, you can use [Homebrew](http://brew.sh/) or
+[Linuxbrew](http://linuxbrew.sh/) to install fzf.
 
 ```sh
 brew install fzf
@@ -411,7 +412,7 @@ options that affect the performance.
   algorithm. However, this algorithm is not guaranteed to find the optimal
   ordering of the matches and is not recommended.
 
-[perf]: https://junegunn.kr/images/fzf-0.16.11.png
+[perf]: https://junegunn.kr/images/fzf-0.17.0.png
 
 ### Executing external programs
 

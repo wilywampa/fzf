@@ -105,6 +105,7 @@ type LightWindow struct {
 	posx     int
 	posy     int
 	tabstop  int
+	fg       Color
 	bg       Color
 }
 
@@ -209,7 +210,9 @@ func (r *LightRenderer) Init() {
 	r.csi(fmt.Sprintf("%dA", r.MaxY()-1))
 	r.csi("G")
 	r.csi("K")
-	r.csi("s")
+	if !r.clearOnExit && !r.fullscreen {
+		r.csi("s")
+	}
 	if !r.fullscreen && r.mouse {
 		r.yoffset, _ = r.findOffset()
 	}
@@ -617,10 +620,6 @@ func (r *LightRenderer) DoesAutoWrap() bool {
 	return false
 }
 
-func (r *LightRenderer) IsOptimized() bool {
-	return false
-}
-
 func (r *LightRenderer) NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window {
 	w := &LightWindow{
 		renderer: r,
@@ -631,8 +630,10 @@ func (r *LightRenderer) NewWindow(top int, left int, width int, height int, bord
 		width:    width,
 		height:   height,
 		tabstop:  r.tabstop,
+		fg:       colDefault,
 		bg:       colDefault}
 	if r.theme != nil {
+		w.fg = r.theme.Fg
 		w.bg = r.theme.Bg
 	}
 	w.drawBorder()
@@ -879,6 +880,9 @@ func (w *LightWindow) Fill(text string) FillReturn {
 
 func (w *LightWindow) CFill(fg Color, bg Color, attr Attr, text string) FillReturn {
 	w.Move(w.posy, w.posx)
+	if fg == colDefault {
+		fg = w.fg
+	}
 	if bg == colDefault {
 		bg = w.bg
 	}
