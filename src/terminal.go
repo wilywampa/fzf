@@ -170,6 +170,7 @@ const (
 	actBeginningOfLine
 	actAbort
 	actAccept
+	actAcceptNonEmpty
 	actBackwardChar
 	actBackwardDeleteChar
 	actBackwardWord
@@ -203,6 +204,7 @@ const (
 	actJump
 	actJumpAccept
 	actPrintQuery
+	actReplaceQuery
 	actToggleSort
 	actTogglePreview
 	actTogglePreviewWrap
@@ -278,6 +280,8 @@ func defaultKeymap() map[int][]action {
 	keymap[tui.Rune] = toActions(actRune)
 	keymap[tui.Mouse] = toActions(actMouse)
 	keymap[tui.DoubleClick] = toActions(actAccept)
+	keymap[tui.LeftClick] = toActions(actIgnore)
+	keymap[tui.RightClick] = toActions(actToggle)
 	return keymap
 }
 
@@ -691,7 +695,11 @@ func (t *Terminal) printInfo() {
 		output += fmt.Sprintf(" (%d%%)", t.progress)
 	}
 	if !t.success && t.count == 0 {
-		output += " [ERROR]"
+		if len(os.Getenv("FZF_DEFAULT_COMMAND")) > 0 {
+			output = "[$FZF_DEFAULT_COMMAND failed]"
+		} else {
+			output = "[default command failed - $FZF_DEFAULT_COMMAND required]"
+		}
 	}
 	if pos+len(output) <= t.window.Width() {
 		t.window.CPrint(tui.ColInfo, 0, output)
@@ -1362,6 +1370,12 @@ func (t *Terminal) Loop() {
 					command := replacePlaceholder(t.preview.command,
 						t.ansi, t.delimiter, false, string(t.input), request)
 					cmd := util.ExecCommand(command)
+					if t.pwindow != nil {
+						env := os.Environ()
+						env = append(env, fmt.Sprintf("LINES=%d", t.pwindow.Height()))
+						env = append(env, fmt.Sprintf("COLUMNS=%d", t.pwindow.Width()))
+						cmd.Env = env
+					}
 					out, _ := cmd.CombinedOutput()
 					t.reqBox.Set(reqPreviewDisplay, string(out))
 				} else {
@@ -1556,6 +1570,11 @@ func (t *Terminal) Loop() {
 				}
 			case actPrintQuery:
 				req(reqPrintQuery)
+			case actReplaceQuery:
+				if t.cy >= 0 && t.cy < t.merger.Length() {
+					t.input = t.merger.Get(t.cy).item.text.ToRunes()
+					t.cx = len(t.input)
+				}
 			case actAbort:
 				req(reqQuit)
 			case actDeleteChar:
@@ -1638,6 +1657,10 @@ func (t *Terminal) Loop() {
 				req(reqList)
 			case actAccept:
 				req(reqClose)
+			case actAcceptNonEmpty:
+				if len(t.selected) > 0 || t.merger.Length() > 0 || !t.reading && t.count == 0 {
+					req(reqClose)
+				}
 			case actClearScreen:
 				req(reqRedraw)
 			case actTop:
@@ -1762,6 +1785,10 @@ func (t *Terminal) Loop() {
 								toggle()
 							}
 							req(reqList)
+							if me.Left {
+								return doActions(t.keymap[tui.LeftClick], tui.LeftClick)
+							}
+							return doActions(t.keymap[tui.RightClick], tui.RightClick)
 						}
 					}
 				}

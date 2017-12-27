@@ -23,9 +23,10 @@ Table of Contents
 -----------------
 
    * [Installation](#installation)
-      * [Using git](#using-git)
       * [Using Homebrew or Linuxbrew](#using-homebrew-or-linuxbrew)
+      * [Using git](#using-git)
       * [As Vim plugin](#as-vim-plugin)
+      * [Fedora](#fedora)
       * [Windows](#windows)
    * [Upgrading fzf](#upgrading-fzf)
    * [Building fzf](#building-fzf)
@@ -51,7 +52,7 @@ Table of Contents
       * [Executing external programs](#executing-external-programs)
       * [Preview window](#preview-window)
    * [Tips](#tips)
-      * [Respecting .gitignore, <code>.hgignore</code>, and <code>svn:ignore</code>](#respecting-gitignore-hgignore-and-svnignore)
+      * [Respecting .gitignore](#respecting-gitignore)
       * [git ls-tree for fast traversal](#git-ls-tree-for-fast-traversal)
       * [Fish shell](#fish-shell)
    * [<a href="LICENSE">License</a>](#license)
@@ -73,20 +74,10 @@ stuff.
 
 [bin]: https://github.com/junegunn/fzf-bin/releases
 
-### Using git
-
-Clone this repository and run
-[install](https://github.com/junegunn/fzf/blob/master/install) script.
-
-```sh
-git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
-~/.fzf/install
-```
-
 ### Using Homebrew or Linuxbrew
 
-Alternatively, you can use [Homebrew](http://brew.sh/) or
-[Linuxbrew](http://linuxbrew.sh/) to install fzf.
+You can use [Homebrew](http://brew.sh/) or [Linuxbrew](http://linuxbrew.sh/)
+to install fzf.
 
 ```sh
 brew install fzf
@@ -95,24 +86,64 @@ brew install fzf
 $(brew --prefix)/opt/fzf/install
 ```
 
+### Using git
+
+Alternatively, you can "git clone" this repository to any directory and run
+[install](https://github.com/junegunn/fzf/blob/master/install) script.
+
+```sh
+git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
+~/.fzf/install
+```
+
 ### As Vim plugin
 
-You can manually add the directory to `&runtimepath` as follows,
+Once you have fzf installed, you can enable it inside Vim simply by adding the
+directory to `&runtimepath` as follows:
 
 ```vim
-" If installed using git
-set rtp+=~/.fzf
-
 " If installed using Homebrew
 set rtp+=/usr/local/opt/fzf
+
+" If installed using git
+set rtp+=~/.fzf
 ```
 
-But it's recommended that you use a plugin manager like
-[vim-plug](https://github.com/junegunn/vim-plug).
+If you use [vim-plug](https://github.com/junegunn/vim-plug), the same can be
+written as:
 
 ```vim
-Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
+" If installed using Homebrew
+Plug '/usr/local/opt/fzf'
+
+" If installed using git
+Plug '~/.fzf'
 ```
+
+But instead of separately installing fzf on your system (using Homebrew or
+"git clone") and enabling it on Vim (adding it to `&runtimepath`), you can use
+vim-plug to do both.
+
+```vim
+" PlugInstall and PlugUpdate will clone fzf in ~/.fzf and run install script
+Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
+  " Both options are optional. You don't have to install fzf in ~/.fzf
+  " and you don't have to run install script if you use fzf only in Vim.
+```
+
+### Fedora
+
+fzf is available in Fedora 26 and above, and can be installed using the usual
+method:
+
+```sh
+sudo dnf install fzf
+```
+
+Shell completion and plugins for vim or neovim are enabled by default. Shell
+key bindings are installed but not enabled by default. See Fedora's package
+documentation for more information.
+
 
 ### Windows
 
@@ -231,7 +262,7 @@ or `py`.
 
 - `FZF_DEFAULT_COMMAND`
     - Default command to use when input is tty
-    - e.g. `export FZF_DEFAULT_COMMAND='ag -g ""'`
+    - e.g. `export FZF_DEFAULT_COMMAND='fd --type f'`
 - `FZF_DEFAULT_OPTS`
     - Default options
     - e.g. `export FZF_DEFAULT_OPTS="--reverse --inline-info"`
@@ -369,25 +400,19 @@ export FZF_COMPLETION_TRIGGER='~~'
 # Options to fzf command
 export FZF_COMPLETION_OPTS='+c -x'
 
-# Use ag instead of the default find command for listing path candidates.
-# - The first argument to the function is the base path to start traversal
+# Use fd (https://github.com/sharkdp/fd) instead of the default find
+# command for listing path candidates.
+# - The first argument to the function ($1) is the base path to start traversal
 # - See the source code (completion.{bash,zsh}) for the details.
-# - ag only lists files, so we use with-dir script to augment the output
 _fzf_compgen_path() {
-  ag -g "" "$1" | with-dir "$1"
+  fd --hidden --follow --exclude ".git" . "$1"
 }
 
-# Use ag to generate the list for directory completion
+# Use fd to generate the list for directory completion
 _fzf_compgen_dir() {
-  ag -g "" "$1" | only-dir "$1"
+  fd --type d --hidden --follow --exclude ".git" . "$1"
 }
 ```
-
-`only-dir` and `with-dir` scripts can be found [here][dir-scripts]. They are
-written in Ruby, but you should be able to rewrite them in any language you
-prefer.
-
-[dir-scripts]: https://gist.github.com/junegunn/8c3796a965f22e6a803fe53096ad7a75
 
 #### Supported commands
 
@@ -489,30 +514,33 @@ For more advanced examples, see [Key bindings for git with fzf][fzf-git].
 Tips
 ----
 
-#### Respecting `.gitignore`, `.hgignore`, and `svn:ignore`
+#### Respecting `.gitignore`
 
-[ag](https://github.com/ggreer/the_silver_searcher) or
-[rg](https://github.com/BurntSushi/ripgrep) will do the
-filtering:
+You can use [fd](https://github.com/sharkdp/fd),
+[ripgrep](https://github.com/BurntSushi/ripgrep), or [the silver
+searcher](https://github.com/ggreer/the_silver_searcher) instead of the
+default find command to traverse the file system while respecting
+`.gitignore`.
 
 ```sh
-# Feed the output of ag into fzf
-ag -g "" | fzf
+# Feed the output of fd into fzf
+fd --type f | fzf
 
-# Setting ag as the default source for fzf
-export FZF_DEFAULT_COMMAND='ag -g ""'
+# Setting fd as the default source for fzf
+export FZF_DEFAULT_COMMAND='fd --type f'
 
-# Now fzf (w/o pipe) will use ag instead of find
+# Now fzf (w/o pipe) will use fd instead of find
 fzf
 
 # To apply the command to CTRL-T as well
 export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
 ```
 
-If you don't want to exclude hidden files, use the following command:
+If you want the command to follow symbolic links, and don't want it to exclude
+hidden files, use the following command:
 
 ```sh
-export FZF_DEFAULT_COMMAND='ag --hidden --ignore .git -g ""'
+export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git'
 ```
 
 #### `git ls-tree` for fast traversal
