@@ -1,35 +1,15 @@
-/*
-Package fzf implements fzf, a command-line fuzzy finder.
-
-The MIT License (MIT)
-
-Copyright (c) 2017 Junegunn Choi
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
+// Package fzf implements fzf, a command-line fuzzy finder.
 package fzf
 
 import (
 	"fmt"
+	"maps"
+	"math"
 	"os"
+	"sync"
 	"time"
 
+	"github.com/junegunn/fzf/src/tui"
 	"github.com/junegunn/fzf/src/util"
 )
 
@@ -39,22 +19,68 @@ Reader   -> EvtReadNew        -> Matcher  (restart)
 Terminal -> EvtSearchNew:bool -> Matcher  (restart)
 Matcher  -> EvtSearchProgress -> Terminal (update info)
 Matcher  -> EvtSearchFin      -> Terminal (update list)
-Matcher  -> EvtHeader         -> Terminal (update header)
 */
 
+type revision struct {
+	major int
+	minor int
+}
+
+func (r *revision) bumpMajor() {
+	r.major++
+	r.minor = 0
+}
+
+func (r *revision) bumpMinor() {
+	r.minor++
+}
+
+func (r revision) compatible(other revision) bool {
+	return r.major == other.major
+}
+
+func buildItemTransformer(opts *Options) func(*Item) string {
+	if opts.AcceptNth != nil {
+		fn := opts.AcceptNth(opts.Delimiter)
+		return func(item *Item) string {
+			return item.acceptNth(opts.Ansi, opts.Delimiter, fn)
+		}
+	}
+	return func(item *Item) string {
+		return item.AsString(opts.Ansi)
+	}
+}
+
 // Run starts fzf
-func Run(opts *Options, revision string) {
+func Run(opts *Options) (int, error) {
+	if opts.Filter == nil {
+		if opts.useTmux() {
+			return runTmux(os.Args, opts)
+		}
+		if opts.useZellij() {
+			return runZellij(os.Args, opts)
+		}
+
+		if needWinpty(opts) {
+			return runWinpty(os.Args, opts)
+		}
+	}
+
+	if err := postProcessOptions(opts); err != nil {
+		return ExitError, err
+	}
+
+	defer util.RunAtExitFuncs()
+
+	// Output channel given
+	if opts.Output != nil {
+		opts.Printer = func(str string) {
+			opts.Output <- str
+		}
+	}
+
 	sort := opts.Sort > 0
 	sortCriteria = opts.Criteria
-
-	if opts.Version {
-		if len(revision) > 0 {
-			fmt.Printf("%s (%s)\n", version, revision)
-		} else {
-			fmt.Println(version)
-		}
-		os.Exit(exitOk)
-	}
 
 	// Event channel
 	eventBox := util.NewEventBox()
@@ -63,51 +89,85 @@ func Run(opts *Options, revision string) {
 	ansiProcessor := func(data []byte) (util.Chars, *[]ansiOffset) {
 		return util.ToChars(data), nil
 	}
+
+	var lineAnsiState, prevLineAnsiState *ansiState
 	if opts.Ansi {
-		if opts.Theme != nil {
-			var state *ansiState
-			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
-				trimmed, offsets, newState := extractColor(string(data), state, nil)
-				state = newState
-				return util.ToChars([]byte(trimmed)), offsets
+		ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
+			prevLineAnsiState = lineAnsiState
+			trimmed, offsets, newState := extractColor(byteString(data), lineAnsiState, nil)
+			lineAnsiState = newState
+
+			// Full line background is found. Add a special marker.
+			if offsets != nil && newState != nil && len(*offsets) > 0 && newState.lbg >= 0 {
+				marker := (*offsets)[len(*offsets)-1]
+				marker.offset[0] = marker.offset[1]
+				marker.color.bg = newState.lbg
+				marker.color.attr = marker.color.attr | tui.FullBg
+				newOffsets := append(*offsets, marker)
+				offsets = &newOffsets
+
+				// Reset the full-line background color
+				lineAnsiState.lbg = -1
 			}
-		} else {
-			// When color is disabled but ansi option is given,
-			// we simply strip out ANSI codes from the input
-			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
-				trimmed, _, _ := extractColor(string(data), nil, nil)
-				return util.ToChars([]byte(trimmed)), nil
-			}
+			return util.ToChars(stringBytes(trimmed)), offsets
 		}
 	}
 
 	// Chunk list
+	cache := NewChunkCache()
 	var chunkList *ChunkList
 	var itemIndex int32
-	header := make([]string, 0, opts.HeaderLines)
-	if len(opts.WithNth) == 0 {
-		chunkList = NewChunkList(func(item *Item, data []byte) bool {
-			if len(header) < opts.HeaderLines {
-				header = append(header, string(data))
-				eventBox.Set(EvtHeader, header)
-				return false
+	// transformItem applies with-nth transformation to an item's raw data.
+	// It handles ANSI token propagation using prevLineAnsiState for cross-line continuity.
+	transformItem := func(item *Item, data []byte, transformer func([]Token, int32) string, index int32) {
+		tokens := Tokenize(byteString(data), opts.Delimiter)
+		if opts.Ansi && len(tokens) > 1 {
+			var ansiState *ansiState
+			if prevLineAnsiState != nil {
+				ansiStateDup := *prevLineAnsiState
+				ansiState = &ansiStateDup
 			}
+			for _, token := range tokens {
+				prevAnsiState := ansiState
+				_, _, ansiState = extractColor(token.text.ToString(), ansiState, nil)
+				if prevAnsiState != nil {
+					token.text.Prepend("\x1b[m" + prevAnsiState.ToString())
+				} else {
+					token.text.Prepend("\x1b[m")
+				}
+			}
+		}
+		transformed := transformer(tokens, index)
+		item.text, item.colors = ansiProcessor(stringBytes(transformed))
+
+		// We should not trim trailing whitespaces with background colors
+		var maxColorOffset int32
+		if item.colors != nil {
+			for _, ansi := range *item.colors {
+				if ansi.color.bg >= 0 {
+					maxColorOffset = max(maxColorOffset, ansi.offset[1])
+				}
+			}
+		}
+		item.text.TrimTrailingWhitespaces(int(maxColorOffset))
+	}
+
+	var nthTransformer func([]Token, int32) string
+	if opts.WithNth == nil {
+		chunkList = NewChunkList(cache, func(item *Item, data []byte) bool {
 			item.text, item.colors = ansiProcessor(data)
 			item.text.Index = itemIndex
 			itemIndex++
 			return true
 		})
 	} else {
-		chunkList = NewChunkList(func(item *Item, data []byte) bool {
-			tokens := Tokenize(string(data), opts.Delimiter)
-			trans := Transform(tokens, opts.WithNth)
-			transformed := joinTokens(trans)
-			if len(header) < opts.HeaderLines {
-				header = append(header, transformed)
-				eventBox.Set(EvtHeader, header)
-				return false
+		nthTransformer = opts.WithNth(opts.Delimiter)
+		chunkList = NewChunkList(cache, func(item *Item, data []byte) bool {
+			if nthTransformer == nil {
+				item.text, item.colors = ansiProcessor(data)
+			} else {
+				transformItem(item, data, nthTransformer, itemIndex)
 			}
-			item.text, item.colors = ansiProcessor([]byte(transformed))
 			item.text.Index = itemIndex
 			item.origText = &data
 			itemIndex++
@@ -115,32 +175,87 @@ func Run(opts *Options, revision string) {
 		})
 	}
 
+	// Process executor
+	executor := util.NewExecutor(opts.WithShell)
+
+	// Terminal I/O
+	var terminal *Terminal
+	var err error
+	var initialEnv []string
+	initialReload := opts.extractReloadOnStart()
+	if opts.Filter == nil {
+		terminal, err = NewTerminal(opts, eventBox, executor)
+		if err != nil {
+			return ExitError, err
+		}
+		if len(initialReload) > 0 {
+			var temps []string
+			initialReload, temps = terminal.replacePlaceholderInInitialCommand(initialReload)
+			initialEnv = terminal.environ()
+			defer removeFiles(temps)
+		}
+	}
+
 	// Reader
-	streamingFilter := opts.Filter != nil && !sort && !opts.Tac && !opts.Sync
+	streamingFilter := opts.Filter != nil && !sort && !opts.Tac && !opts.Sync && opts.Bench == 0
+	var reader *Reader
+	var ingestionStart time.Time
 	if !streamingFilter {
-		reader := NewReader(func(data []byte) bool {
+		reader = NewReader(func(data []byte) bool {
 			return chunkList.Push(data)
-		}, eventBox, opts.ReadZero)
-		go reader.ReadSource()
+		}, eventBox, executor, opts.ReadZero, opts.Filter == nil)
+
+		ingestionStart = time.Now()
+		readyChan := make(chan bool)
+		go reader.ReadSource(opts.Input, opts.WalkerRoot, opts.WalkerOpts, opts.WalkerSkip, initialReload, initialEnv, readyChan)
+		<-readyChan
 	}
 
 	// Matcher
 	forward := true
-	for _, cri := range opts.Criteria[1:] {
-		if cri == byEnd {
+	withPos := false
+	for idx := len(opts.Criteria) - 1; idx > 0; idx-- {
+		switch opts.Criteria[idx] {
+		case byChunk:
+			withPos = true
+		case byEnd:
 			forward = false
-			break
-		}
-		if cri == byBegin {
-			break
+		case byBegin:
+			forward = true
+		case byPathname:
+			withPos = true
+			forward = false
 		}
 	}
+
+	nth := opts.Nth
+	inputRevision := revision{}
+	snapshotRevision := revision{}
+	patternCache := make(map[string]*Pattern)
+	denyMutex := sync.Mutex{}
+	denylist := make(map[int32]struct{})
+	clearDenylist := func() {
+		denyMutex.Lock()
+		if len(denylist) > 0 {
+			patternCache = make(map[string]*Pattern)
+		}
+		denylist = make(map[int32]struct{})
+		denyMutex.Unlock()
+	}
+	if opts.HeaderLines > math.MaxInt32 {
+		opts.HeaderLines = math.MaxInt32
+	}
+	headerLines := int32(opts.HeaderLines)
+	headerUpdated := false
 	patternBuilder := func(runes []rune) *Pattern {
-		return BuildPattern(
-			opts.Fuzzy, opts.FuzzyAlgo, opts.Extended, opts.Case, opts.Normalize, forward,
-			opts.Filter == nil, opts.Nth, opts.Delimiter, runes)
+		denyMutex.Lock()
+		denylistCopy := maps.Clone(denylist)
+		denyMutex.Unlock()
+		return BuildPattern(cache, patternCache,
+			opts.Fuzzy, opts.FuzzyAlgo, opts.Extended, opts.Case, opts.Normalize, forward, withPos,
+			opts.Filter == nil, nth, opts.Delimiter, inputRevision, runes, denylistCopy, headerLines)
 	}
-	matcher := NewMatcher(patternBuilder, sort, opts.Tac, eventBox)
+	matcher := NewMatcher(cache, patternBuilder, sort, opts.Tac, eventBox, inputRevision, opts.Threads)
 
 	// Filtering mode
 	if opts.Filter != nil {
@@ -149,39 +264,91 @@ func Run(opts *Options, revision string) {
 		}
 
 		pattern := patternBuilder([]rune(*opts.Filter))
+		matcher.sort = pattern.sortable
+
+		transformer := buildItemTransformer(opts)
 
 		found := false
 		if streamingFilter {
 			slab := util.MakeSlab(slab16Size, slab32Size)
+			mutex := sync.Mutex{}
 			reader := NewReader(
 				func(runes []byte) bool {
 					item := Item{}
 					if chunkList.trans(&item, runes) {
-						if result, _, _ := pattern.MatchItem(&item, false, slab); result != nil {
-							opts.Printer(item.text.ToString())
+						if item.Index() < headerLines {
+							return false
+						}
+						mutex.Lock()
+						if result, _, _ := pattern.MatchItem(&item, false, slab); result.item != nil {
+							opts.Printer(transformer(&item))
 							found = true
 						}
+						mutex.Unlock()
 					}
 					return false
-				}, eventBox, opts.ReadZero)
-			reader.ReadSource()
+				}, eventBox, executor, opts.ReadZero, false)
+			reader.ReadSource(opts.Input, opts.WalkerRoot, opts.WalkerOpts, opts.WalkerSkip, initialReload, initialEnv, nil)
 		} else {
 			eventBox.Unwatch(EvtReadNew)
 			eventBox.WaitFor(EvtReadFin)
+			ingestionTime := time.Since(ingestionStart)
 
-			snapshot, _ := chunkList.Snapshot()
-			merger, _ := matcher.scan(MatchRequest{
+			// NOTE: Streaming filter is inherently not compatible with --tail
+			snapshot, _, _ := chunkList.Snapshot(opts.Tail)
+
+			if opts.Bench > 0 {
+				// Benchmark mode: repeat scan for the given duration
+				totalItems := CountItems(snapshot)
+				var matchCount int
+				var times []time.Duration
+				deadline := time.Now().Add(opts.Bench)
+				for time.Now().Before(deadline) {
+					cache.Clear()
+					start := time.Now()
+					result := matcher.scan(MatchRequest{
+						chunks:  snapshot,
+						pattern: pattern})
+					times = append(times, time.Since(start))
+					matchCount = result.merger.Length()
+				}
+				// Print stats
+				var total time.Duration
+				minD, maxD := times[0], times[0]
+				for _, d := range times {
+					total += d
+					if d < minD {
+						minD = d
+					}
+					if d > maxD {
+						maxD = d
+					}
+				}
+				avg := total / time.Duration(len(times))
+				selectivity := float64(matchCount) / float64(totalItems) * 100
+				fmt.Printf("  %d iterations  avg: %.2fms  min: %.2fms  max: %.2fms  total: %.2fs  items: %d  matches: %d (%.2f%%)  ingestion: %.2fms\n",
+					len(times),
+					float64(avg.Microseconds())/1000,
+					float64(minD.Microseconds())/1000,
+					float64(maxD.Microseconds())/1000,
+					total.Seconds(),
+					totalItems, matchCount, selectivity,
+					float64(ingestionTime.Microseconds())/1000)
+				return ExitOk, nil
+			}
+
+			result := matcher.scan(MatchRequest{
 				chunks:  snapshot,
 				pattern: pattern})
-			for i := 0; i < merger.Length(); i++ {
-				opts.Printer(merger.Get(i).item.AsString(opts.Ansi))
+			for i := 0; i < result.merger.Length(); i++ {
+				opts.Printer(transformer(result.merger.Get(i).item))
 				found = true
 			}
 		}
 		if found {
-			os.Exit(exitOk)
+			return ExitOk, nil
 		}
-		os.Exit(exitNoMatch)
+		return ExitNoMatch, nil
 	}
 
 	// Synchronous search
@@ -192,45 +359,234 @@ func Run(opts *Options, revision string) {
 
 	// Go interactive
 	go matcher.Loop()
+	defer matcher.Stop()
 
-	// Terminal I/O
-	terminal := NewTerminal(opts, eventBox)
-	deferred := opts.Select1 || opts.Exit0
+	// Handling adaptive height
+	maxFit := 0 // Maximum number of items that can fit on screen
+	padHeight := 0
+	heightUnknown := opts.Height.auto
+	if heightUnknown {
+		maxFit, padHeight = terminal.MaxFitAndPad()
+	}
+	deferred := opts.Select1 || opts.Exit0 || opts.Sync
 	go terminal.Loop()
-	if !deferred {
-		terminal.startChan <- true
+	if !deferred && !heightUnknown {
+		// Start right away
+		terminal.startChan <- fitpad{-1, -1}
 	}
 
 	// Event coordination
 	reading := true
 	ticks := 0
+	startTick := 0
+	var nextCommand *commandSpec
+	var nextEnviron []string
 	eventBox.Watch(EvtReadNew)
+	total := 0
+	query := []rune{}
+	determine := func(final bool) {
+		if heightUnknown {
+			items := max(0, total-int(headerLines))
+			if items >= maxFit || final {
+				deferred = false
+				heightUnknown = false
+				terminal.startChan <- fitpad{min(items, maxFit), padHeight}
+			}
+		} else if deferred {
+			deferred = false
+			terminal.startChan <- fitpad{-1, -1}
+		}
+	}
+
+	useSnapshot := false
+	var snapshot []*Chunk
+	var count int
+	restart := func(command commandSpec, environ []string) {
+		if !useSnapshot {
+			clearDenylist()
+		}
+		reading = true
+		headerUpdated = false
+		startTick = ticks
+		chunkList.Clear()
+		itemIndex = 0
+		inputRevision.bumpMajor()
+		readyChan := make(chan bool)
+		go reader.restart(command, environ, readyChan)
+		<-readyChan
+	}
+
+	exitCode := ExitOk
+	stop := false
 	for {
 		delay := true
 		ticks++
+		input := func() []rune {
+			paused, input := terminal.Input()
+			if !paused {
+				query = input
+			}
+			return query
+		}
 		eventBox.Wait(func(events *util.Events) {
 			if _, fin := (*events)[EvtReadFin]; fin {
 				delete(*events, EvtReadNew)
 			}
 			for evt, value := range *events {
 				switch evt {
-
-				case EvtReadNew, EvtReadFin:
-					reading = reading && evt == EvtReadNew
-					snapshot, count := chunkList.Snapshot()
-					terminal.UpdateCount(count, !reading, value.(bool))
-					if opts.Sync {
-						terminal.UpdateList(PassMerger(&snapshot, opts.Tac))
+				case EvtQuit:
+					if reading {
+						reader.terminate()
 					}
-					matcher.Reset(snapshot, terminal.Input(), false, !reading, sort)
+					quitSignal := value.(quitSignal)
+					exitCode = quitSignal.code
+					err = quitSignal.err
+					stop = true
+					return
+				case EvtReadNew, EvtReadFin:
+					if evt == EvtReadFin && nextCommand != nil {
+						restart(*nextCommand, nextEnviron)
+						nextCommand = nil
+						nextEnviron = nil
+						break
+					} else {
+						reading = reading && evt == EvtReadNew
+					}
+					if useSnapshot && evt == EvtReadFin { // reload-sync
+						clearDenylist()
+						useSnapshot = false
+					}
+					if !useSnapshot {
+						if !snapshotRevision.compatible(inputRevision) {
+							query = []rune{}
+						}
+						var changed bool
+						snapshot, count, changed = chunkList.Snapshot(opts.Tail)
+						if changed {
+							inputRevision.bumpMinor()
+						}
+						snapshotRevision = inputRevision
+					}
+					total = count
+					terminal.UpdateCount(max(0, total-int(headerLines)), !reading, value.(*string))
+					if headerLines > 0 && !headerUpdated {
+						terminal.UpdateHeader(GetItems(snapshot, int(headerLines)))
+						headerUpdated = total >= int(headerLines)
+					}
+					if heightUnknown && !deferred {
+						determine(!reading)
+					}
+					if !useSnapshot || evt == EvtReadFin {
+						matcher.Reset(snapshot, input(), false, !reading, sort, snapshotRevision)
+					}
 
 				case EvtSearchNew:
+					var command *commandSpec
+					var environ []string
+					var changed bool
+					headerLinesChanged := false
+					withNthChanged := false
 					switch val := value.(type) {
-					case bool:
-						sort = val
+					case searchRequest:
+						sort = val.sort
+						command = val.command
+						environ = val.environ
+						changed = val.changed
+						bump := false
+						if len(val.denylist) > 0 && val.revision.compatible(inputRevision) {
+							denyMutex.Lock()
+							for _, itemIndex := range val.denylist {
+								denylist[itemIndex] = struct{}{}
+							}
+							denyMutex.Unlock()
+							bump = true
+						}
+						if val.nth != nil {
+							// Change nth and clear caches
+							nth = *val.nth
+							bump = true
+						}
+						if val.headerLines != nil {
+							headerLines = int32(*val.headerLines)
+							headerUpdated = false
+							headerLinesChanged = true
+							bump = true
+						}
+						if val.withNth != nil {
+							newTransformer := val.withNth.fn
+							// Cancel any in-flight scan and block the terminal from reading
+							// items before mutating them in-place. Snapshot shares middle
+							// chunk pointers, so the matcher and terminal can race with us.
+							matcher.CancelScan()
+							terminal.PauseRendering()
+							// Reset cross-line ANSI state before re-processing all items
+							lineAnsiState = nil
+							prevLineAnsiState = nil
+							chunkList.ForEachItem(func(item *Item) {
+								origBytes := *item.origText
+								savedIndex := item.Index()
+								if newTransformer != nil {
+									transformItem(item, origBytes, newTransformer, savedIndex)
+								} else {
+									item.text, item.colors = ansiProcessor(origBytes)
+								}
+								item.text.Index = savedIndex
+								item.transformed = nil
+							}, func() {
+								nthTransformer = newTransformer
+							})
+							terminal.ResumeRendering()
+							matcher.ResumeScan()
+							withNthChanged = true
+							bump = true
+						}
+						if bump {
+							patternCache = make(map[string]*Pattern)
+							cache.Clear()
+							inputRevision.bumpMinor()
+						}
+						if command != nil {
+							useSnapshot = val.sync
+						}
 					}
-					snapshot, _ := chunkList.Snapshot()
-					matcher.Reset(snapshot, terminal.Input(), true, !reading, sort)
+					if command != nil {
+						if reading {
+							reader.terminate()
+							nextCommand = command
+							nextEnviron = environ
+						} else {
+							restart(*command, environ)
+						}
+					}
+					if !changed {
+						break
+					}
+					if !useSnapshot {
+						newSnapshot, newCount, changed := chunkList.Snapshot(opts.Tail)
+						if changed {
+							inputRevision.bumpMinor()
+						}
+						// We want to avoid showing empty list when reload is triggered
+						// and the query string is changed at the same time i.e. command != nil && changed
+						if command == nil || newCount > 0 {
+							if snapshotRevision != inputRevision {
+								query = []rune{}
+							}
+							snapshot = newSnapshot
+							snapshotRevision = inputRevision
+						}
+					}
+					if headerLinesChanged {
+						terminal.UpdateCount(max(0, total-int(headerLines)), !reading, nil)
+						if headerLines > 0 {
+							terminal.UpdateHeader(GetItems(snapshot, int(headerLines)))
+						} else {
+							terminal.UpdateHeader(nil)
+						}
+					} else if withNthChanged && headerLines > 0 {
+						terminal.UpdateHeader(GetItems(snapshot, int(headerLines)))
+					}
+					matcher.Reset(snapshot, input(), true, !reading, sort, snapshotRevision)
 					delay = false
 
 				case EvtSearchProgress:
@@ -239,18 +595,15 @@ func Run(opts *Options, revision string) {
 						terminal.UpdateProgress(val)
 					}
 
-				case EvtHeader:
-					terminal.UpdateHeader(value.([]string))
-
 				case EvtSearchFin:
 					switch val := value.(type) {
-					case *Merger:
+					case MatchResult:
+						merger := val.merger
 						if deferred {
-							count := val.Length()
+							count := merger.Length()
 							if opts.Select1 && count > 1 || opts.Exit0 && !opts.Select1 && count > 0 {
-								deferred = false
-								terminal.startChan <- true
-							} else if val.final {
+								determine(merger.final)
+							} else if merger.final {
 								if opts.Exit0 && count == 0 || opts.Select1 && count == 1 {
 									if opts.PrintQuery {
 										opts.Printer(opts.Query)
@@ -258,16 +611,17 @@ func Run(opts *Options, revision string) {
 									if len(opts.Expect) > 0 {
 										opts.Printer("")
 									}
-									for i := 0; i < count; i++ {
-										opts.Printer(val.Get(i).item.AsString(opts.Ansi))
+									transformer := buildItemTransformer(opts)
+									for i := range count {
+										opts.Printer(transformer(merger.Get(i).item))
 									}
-									if count > 0 {
-										os.Exit(exitOk)
+									if count == 0 {
+										exitCode = ExitNoMatch
 									}
-									os.Exit(exitNoMatch)
+									stop = true
+									return
 								}
-								deferred = false
-								terminal.startChan <- true
+								determine(merger.final)
 							}
 						}
 						terminal.UpdateList(val)
@@ -276,11 +630,15 @@ func Run(opts *Options, revision string) {
 			}
 			events.Clear()
 		})
+		if stop {
+			break
+		}
 		if delay && reading {
-			dur := util.DurWithin(
-				time.Duration(ticks)*coordinatorDelayStep,
+			dur := util.Constrain(
+				time.Duration(ticks-startTick)*coordinatorDelayStep,
 				0, coordinatorDelayMax)
 			time.Sleep(dur)
 		}
 	}
+	return exitCode, err
 }

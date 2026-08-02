@@ -10,10 +10,10 @@ import (
 func TestReadFromCommand(t *testing.T) {
 	strs := []string{}
 	eb := util.NewEventBox()
-	reader := Reader{
-		pusher:   func(s []byte) bool { strs = append(strs, string(s)); return true },
-		eventBox: eb,
-		event:    int32(EvtReady)}
+	exec := util.NewExecutor("")
+	reader := NewReader(
+		func(s []byte) bool { strs = append(strs, string(s)); return true },
+		eb, exec, false, true)
 
 	reader.startEventPoller()
 
@@ -23,8 +23,12 @@ func TestReadFromCommand(t *testing.T) {
 	}
 
 	// Normal command
-	reader.fin(reader.readFromCommand("sh", `echo abc && echo def`))
-	if len(strs) != 2 || strs[0] != "abc" || strs[1] != "def" {
+	counter := 0
+	ready := func() {
+		counter++
+	}
+	reader.fin(reader.readFromCommand(`echo abc&&echo def`, nil, ready))
+	if len(strs) != 2 || strs[0] != "abc" || strs[1] != "def" || counter != 1 {
 		t.Errorf("%s", strs)
 	}
 
@@ -48,9 +52,9 @@ func TestReadFromCommand(t *testing.T) {
 	reader.startEventPoller()
 
 	// Failing command
-	reader.fin(reader.readFromCommand("sh", `no-such-command`))
+	reader.fin(reader.readFromCommand(`no-such-command`, nil, ready))
 	strs = []string{}
-	if len(strs) > 0 {
+	if len(strs) > 0 || counter != 2 {
 		t.Errorf("%s", strs)
 	}
 

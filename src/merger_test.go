@@ -23,21 +23,22 @@ func randResult() Result {
 }
 
 func TestEmptyMerger(t *testing.T) {
-	assert(t, EmptyMerger.Length() == 0, "Not empty")
-	assert(t, EmptyMerger.count == 0, "Invalid count")
-	assert(t, len(EmptyMerger.lists) == 0, "Invalid lists")
-	assert(t, len(EmptyMerger.merged) == 0, "Invalid merged list")
+	r := revision{}
+	assert(t, EmptyMerger(r).Length() == 0, "Not empty")
+	assert(t, EmptyMerger(r).count == 0, "Invalid count")
+	assert(t, len(EmptyMerger(r).lists) == 0, "Invalid lists")
+	assert(t, len(EmptyMerger(r).merged) == 0, "Invalid merged list")
 }
 
 func buildLists(partiallySorted bool) ([][]Result, []Result) {
 	numLists := 4
 	lists := make([][]Result, numLists)
 	cnt := 0
-	for i := 0; i < numLists; i++ {
+	for i := range numLists {
 		numResults := rand.Int() % 20
 		cnt += numResults
 		lists[i] = make([]Result, numResults)
-		for j := 0; j < numResults; j++ {
+		for j := range numResults {
 			item := randResult()
 			lists[i][j] = item
 		}
@@ -53,13 +54,28 @@ func buildLists(partiallySorted bool) ([][]Result, []Result) {
 }
 
 func TestMergerUnsorted(t *testing.T) {
-	lists, items := buildLists(false)
+	lists, _ := buildLists(false)
+
+	// Sort each list by index to simulate real worker behavior
+	// (workers process chunks in ascending order via nextChunk.Add(1))
+	for _, list := range lists {
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].item.Index() < list[j].item.Index()
+		})
+	}
+	items := []Result{}
+	for _, list := range lists {
+		items = append(items, list...)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].item.Index() < items[j].item.Index()
+	})
 	cnt := len(items)
 
-	// Not sorted: same order
-	mg := NewMerger(nil, lists, false, false)
+	// Not sorted: items in ascending index order
+	mg := NewMerger(nil, lists, false, false, revision{}, 0, 0)
 	assert(t, cnt == mg.Length(), "Invalid Length")
-	for i := 0; i < cnt; i++ {
+	for i := range cnt {
 		assert(t, items[i] == mg.Get(i), "Invalid Get")
 	}
 }
@@ -69,17 +85,17 @@ func TestMergerSorted(t *testing.T) {
 	cnt := len(items)
 
 	// Sorted sorted order
-	mg := NewMerger(nil, lists, true, false)
+	mg := NewMerger(nil, lists, true, false, revision{}, 0, 0)
 	assert(t, cnt == mg.Length(), "Invalid Length")
 	sort.Sort(ByRelevance(items))
-	for i := 0; i < cnt; i++ {
+	for i := range cnt {
 		if items[i] != mg.Get(i) {
 			t.Error("Not sorted", items[i], mg.Get(i))
 		}
 	}
 
 	// Inverse order
-	mg2 := NewMerger(nil, lists, true, false)
+	mg2 := NewMerger(nil, lists, true, false, revision{}, 0, 0)
 	for i := cnt - 1; i >= 0; i-- {
 		if items[i] != mg2.Get(i) {
 			t.Error("Not sorted", items[i], mg2.Get(i))

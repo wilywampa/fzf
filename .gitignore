@@ -1,10 +1,15 @@
 bin/fzf
 bin/fzf.exe
+dist
 target
 pkg
-Gemfile.lock
 .DS_Store
 doc/tags
 vendor
 gopath
+*.zwc
+fzf
+tmp
+*.patch
+.idea
 **/.*.un~

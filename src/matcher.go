@@ -3,8 +3,8 @@ package fzf
 import (
 	"fmt"
 	"runtime"
-	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/junegunn/fzf/src/util"
@@ -12,14 +12,30 @@ import (
 
 // MatchRequest represents a search request
 type MatchRequest struct {
-	chunks  []*Chunk
-	pattern *Pattern
-	final   bool
-	sort    bool
+	chunks   []*Chunk
+	pattern  *Pattern
+	final    bool
+	sort     bool
+	revision revision
+}
+
+type MatchResult struct {
+	merger     *Merger
+	passMerger *Merger
+	cancelled  bool
+}
+
+func (mr MatchResult) cacheable() bool {
+	return mr.merger != nil && mr.merger.cacheable()
+}
+
+func (mr MatchResult) final() bool {
+	return mr.merger != nil && mr.merger.final
 }
 
 // Matcher is responsible for performing search
 type Matcher struct {
+	cache          *ChunkCache
 	patternBuilder func([]rune) *Pattern
 	sort           bool
 	tac            bool
@@ -27,7 +43,11 @@ type Matcher struct {
 	reqBox         *util.EventBox
 	partitions     int
 	slab           []*util.Slab
-	mergerCache    map[string]*Merger
+	sortBuf        [][]Result
+	mergerCache    map[string]MatchResult
+	revision       revision
+	scanMutex      sync.Mutex
+	cancelScan     *util.AtomicBool
 }
 
 const (
@@ -36,10 +56,14 @@ const (
 )
 
 // NewMatcher returns a new Matcher
-func NewMatcher(patternBuilder func([]rune) *Pattern,
-	sort bool, tac bool, eventBox *util.EventBox) *Matcher {
-	partitions := util.Min(numPartitionsMultiplier*runtime.NumCPU(), maxPartitions)
+func NewMatcher(cache *ChunkCache, patternBuilder func([]rune) *Pattern,
+	sort bool, tac bool, eventBox *util.EventBox, revision revision, threads int) *Matcher {
+	partitions := runtime.NumCPU()
+	if threads > 0 {
+		partitions = threads
+	}
 	return &Matcher{
+		cache:          cache,
 		patternBuilder: patternBuilder,
 		sort:           sort,
 		tac:            tac,
@@ -47,7 +71,10 @@ func NewMatcher(patternBuilder func([]rune) *Pattern,
 		reqBox:         util.NewEventBox(),
 		partitions:     partitions,
 		slab:           make([]*util.Slab, partitions),
-		mergerCache:    make(map[string]*Merger)}
+		sortBuf:        make([][]Result, partitions),
+		mergerCache:    make(map[string]MatchResult),
+		revision:       revision,
+		cancelScan:     util.NewAtomicBool(false)}
 }
 
 // Loop puts Matcher in action
@@ -57,8 +84,13 @@ func (m *Matcher) Loop() {
 	for {
 		var request MatchRequest
 
+		stop := false
 		m.reqBox.Wait(func(events *util.Events) {
-			for _, val := range *events {
+			for t, val := range *events {
+				if t == reqQuit {
+					stop = true
+					return
+				}
 				switch val := val.(type) {
 				case MatchRequest:
 					request = val
@@ -68,65 +100,53 @@ func (m *Matcher) Loop() {
 			}
 			events.Clear()
 		})
+		if stop {
+			break
+		}
 
-		if request.sort != m.sort {
+		cacheCleared := false
+		if request.sort != m.sort || request.revision != m.revision {
 			m.sort = request.sort
-			m.mergerCache = make(map[string]*Merger)
-			clearChunkCache()
+			m.mergerCache = make(map[string]MatchResult)
+			if !request.revision.compatible(m.revision) {
+				m.cache.Clear()
+			}
+			m.revision = request.revision
+			cacheCleared = true
 		}
 
 		// Restart search
 		patternString := request.pattern.AsString()
-		var merger *Merger
-		cancelled := false
+		var result MatchResult
 		count := CountItems(request.chunks)
 
-		foundCache := false
-		if count == prevCount {
-			// Look up mergerCache
-			if cached, found := m.mergerCache[patternString]; found {
-				foundCache = true
-				merger = cached
+		if !cacheCleared {
+			if count == prevCount {
+				// Look up mergerCache
+				if cached, found := m.mergerCache[patternString]; found && cached.final() == request.final {
+					result = cached
+				}
+			} else {
+				// Invalidate mergerCache
+				prevCount = count
+				m.mergerCache = make(map[string]MatchResult)
 			}
-		} else {
-			// Invalidate mergerCache
-			prevCount = count
-			m.mergerCache = make(map[string]*Merger)
 		}
 
-		if !foundCache {
-			merger, cancelled = m.scan(request)
+		if result.merger == nil {
+			m.scanMutex.Lock()
+			result = m.scan(request)
+			m.scanMutex.Unlock()
 		}
 
-		if !cancelled {
-			if merger.cacheable() {
-				m.mergerCache[patternString] = merger
+		if !result.cancelled {
+			if result.cacheable() {
+				m.mergerCache[patternString] = result
 			}
-			merger.final = request.final
-			m.eventBox.Set(EvtSearchFin, merger)
+			result.merger.final = request.final
+			m.eventBox.Set(EvtSearchFin, result)
 		}
 	}
-}
-
-func (m *Matcher) sliceChunks(chunks []*Chunk) [][]*Chunk {
-	partitions := m.partitions
-	perSlice := len(chunks) / partitions
-
-	if perSlice == 0 {
-		partitions = len(chunks)
-		perSlice = 1
-	}
-
-	slices := make([][]*Chunk, partitions)
-	for i := 0; i < partitions; i++ {
-		start := i * perSlice
-		end := start + perSlice
-		if i == partitions-1 {
-			end = len(chunks)
-		}
-		slices[i] = chunks[start:end]
-	}
-	return slices
 }
 
 type partialResult struct {
@@ -134,57 +154,55 @@ type partialResult struct {
 	matches []Result
 }
 
-func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
+func (m *Matcher) scan(request MatchRequest) MatchResult {
 	startedAt := time.Now()
 
 	numChunks := len(request.chunks)
 	if numChunks == 0 {
-		return EmptyMerger, false
+		m := EmptyMerger(request.revision)
+		return MatchResult{m, m, false}
 	}
 	pattern := request.pattern
+	passMerger := PassMerger(&request.chunks, m.tac, request.revision, pattern.startIndex)
 	if pattern.IsEmpty() {
-		return PassMerger(&request.chunks, m.tac), false
+		return MatchResult{passMerger, passMerger, false}
 	}
 
+	minIndex := request.chunks[0].items[0].Index()
+	maxIndex := request.chunks[numChunks-1].lastIndex(minIndex)
 	cancelled := util.NewAtomicBool(false)
 
-	slices := m.sliceChunks(request.chunks)
-	numSlices := len(slices)
-	resultChan := make(chan partialResult, numSlices)
+	numWorkers := min(m.partitions, numChunks)
+	var nextChunk atomic.Int32
+	resultChan := make(chan partialResult, numWorkers)
 	countChan := make(chan int, numChunks)
 	waitGroup := sync.WaitGroup{}
 
-	for idx, chunks := range slices {
+	for idx := range numWorkers {
 		waitGroup.Add(1)
 		if m.slab[idx] == nil {
 			m.slab[idx] = util.MakeSlab(slab16Size, slab32Size)
 		}
-		go func(idx int, slab *util.Slab, chunks []*Chunk) {
-			defer func() { waitGroup.Done() }()
-			count := 0
-			allMatches := make([][]Result, len(chunks))
-			for idx, chunk := range chunks {
-				matches := request.pattern.Match(chunk, slab)
-				allMatches[idx] = matches
-				count += len(matches)
+		go func(idx int, slab *util.Slab) {
+			defer waitGroup.Done()
+			var matches []Result
+			for {
+				ci := int(nextChunk.Add(1)) - 1
+				if ci >= numChunks {
+					break
+				}
+				chunkMatches := request.pattern.Match(request.chunks[ci], slab)
+				matches = append(matches, chunkMatches...)
 				if cancelled.Get() {
 					return
 				}
-				countChan <- len(matches)
+				countChan <- len(chunkMatches)
 			}
-			sliceMatches := make([]Result, 0, count)
-			for _, matches := range allMatches {
-				sliceMatches = append(sliceMatches, matches...)
+			if m.sort && request.pattern.sortable {
+				m.sortBuf[idx] = radixSortResults(matches, m.tac, m.sortBuf[idx])
 			}
-			if m.sort {
-				if m.tac {
-					sort.Sort(ByRelevanceTac(sliceMatches))
-				} else {
-					sort.Sort(ByRelevance(sliceMatches))
-				}
-			}
-			resultChan <- partialResult{idx, sliceMatches}
-		}(idx, m.slab[idx], chunks)
+			resultChan <- partialResult{idx, matches}
+		}(idx, m.slab[idx])
 	}
 
 	wait := func() bool {
@@ -203,25 +221,26 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 			break
 		}
 
-		if m.reqBox.Peek(reqReset) {
-			return nil, wait()
+		if m.cancelScan.Get() || m.reqBox.Peek(reqReset) {
+			return MatchResult{nil, nil, wait()}
 		}
 
-		if time.Now().Sub(startedAt) > progressMinDuration {
+		if time.Since(startedAt) > progressMinDuration {
 			m.eventBox.Set(EvtSearchProgress, float32(count)/float32(numChunks))
 		}
 	}
 
-	partialResults := make([][]Result, numSlices)
-	for _ = range slices {
+	partialResults := make([][]Result, numWorkers)
+	for range numWorkers {
 		partialResult := <-resultChan
 		partialResults[partialResult.index] = partialResult.matches
 	}
-	return NewMerger(pattern, partialResults, m.sort, m.tac), false
+	merger := NewMerger(pattern, partialResults, m.sort && request.pattern.sortable, m.tac, request.revision, minIndex, maxIndex)
+	return MatchResult{merger, passMerger, false}
 }
 
 // Reset is called to interrupt/signal the ongoing search
-func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final bool, sort bool) {
+func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final bool, sort bool, revision revision) {
 	pattern := m.patternBuilder(patternRunes)
 
 	var event util.EventType
@@ -230,5 +249,23 @@ func (m *Matcher) Reset(chunks []*Chunk, patternRunes []rune, cancel bool, final
 	} else {
 		event = reqRetry
 	}
-	m.reqBox.Set(event, MatchRequest{chunks, pattern, final, sort})
+	m.reqBox.Set(event, MatchRequest{chunks, pattern, final, sort, revision})
+}
+
+// CancelScan cancels any in-flight scan, waits for it to finish,
+// and prevents new scans from starting until ResumeScan is called.
+// This is used to safely mutate shared items (e.g., during with-nth changes).
+func (m *Matcher) CancelScan() {
+	m.cancelScan.Set(true)
+	m.scanMutex.Lock()
+	m.cancelScan.Set(false)
+}
+
+// ResumeScan allows scans to proceed again after CancelScan.
+func (m *Matcher) ResumeScan() {
+	m.scanMutex.Unlock()
+}
+
+func (m *Matcher) Stop() {
+	m.reqBox.Set(reqQuit, nil)
 }

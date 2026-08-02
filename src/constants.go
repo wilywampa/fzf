@@ -1,46 +1,51 @@
 package fzf
 
 import (
-	"os"
+	"math"
 	"time"
 
 	"github.com/junegunn/fzf/src/util"
 )
 
 const (
-	// Current version
-	version = "0.17.4"
-
 	// Core
 	coordinatorDelayMax  time.Duration = 100 * time.Millisecond
 	coordinatorDelayStep time.Duration = 10 * time.Millisecond
 
 	// Reader
 	readerBufferSize       = 64 * 1024
+	readerSlabSize         = 128 * 1024
 	readerPollIntervalMin  = 10 * time.Millisecond
 	readerPollIntervalStep = 5 * time.Millisecond
 	readerPollIntervalMax  = 50 * time.Millisecond
 
 	// Terminal
-	initialDelay     = 20 * time.Millisecond
-	initialDelayTac  = 100 * time.Millisecond
-	spinnerDuration  = 200 * time.Millisecond
-	maxPatternLength = 300
+	initialDelay      = 20 * time.Millisecond
+	initialDelayTac   = 100 * time.Millisecond
+	spinnerDuration   = 100 * time.Millisecond
+	previewCancelWait = 500 * time.Millisecond
+	previewChunkDelay = 100 * time.Millisecond
+	previewDelayed    = 500 * time.Millisecond
+	maxPatternLength  = 1000
+	maxMulti          = math.MaxInt32
+
+	// Background processes
+	maxBgProcesses          = 30
+	maxBgProcessesPerAction = 3
 
 	// Matcher
-	numPartitionsMultiplier = 8
-	maxPartitions           = 32
-	progressMinDuration     = 200 * time.Millisecond
+	progressMinDuration = 200 * time.Millisecond
 
 	// Capacity of each chunk
-	chunkSize int = 100
+	chunkSize     int = 1024
+	chunkBitWords     = (chunkSize + 63) / 64
 
 	// Pre-allocated memory slices to minimize GC
 	slab16Size int = 100 * 1024 // 200KB * 32 = 12.8MB
 	slab32Size int = 2048       // 8KB * 32 = 256KB
 
 	// Do not cache results of low selectivity queries
-	queryCacheMax int = chunkSize / 5
+	queryCacheMax int = chunkSize / 2
 
 	// Not to cache mergers with large lists
 	mergerCacheMax int = 100000
@@ -52,18 +57,6 @@ const (
 	defaultJumpLabels string = "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+"
 )
 
-var defaultCommand string
-
-func init() {
-	if !util.IsWindows() {
-		defaultCommand = `set -o pipefail; command find -L . -mindepth 1 \( -path '*/\.*' -o -fstype 'sysfs' -o -fstype 'devfs' -o -fstype 'devtmpfs' -o -fstype 'proc' \) -prune -o -type f -print -o -type l -print 2> /dev/null | cut -b3-`
-	} else if os.Getenv("TERM") == "cygwin" {
-		defaultCommand = `sh -c "command find -L . -mindepth 1 -path '*/\.*' -prune -o -type f -print -o -type l -print 2> /dev/null | cut -b3-"`
-	} else {
-		defaultCommand = `for /r %P in (*) do @(set "_curfile=%P" & set "_curfile=!_curfile:%__CD__%=!" & echo !_curfile!)`
-	}
-}
-
 // fzf events
 const (
 	EvtReadNew util.EventType = iota
@@ -71,13 +64,14 @@ const (
 	EvtSearchNew
 	EvtSearchProgress
 	EvtSearchFin
-	EvtHeader
 	EvtReady
+	EvtQuit
 )
 
 const (
-	exitOk        = 0
-	exitNoMatch   = 1
-	exitError     = 2
-	exitInterrupt = 130
+	ExitOk        = 0
+	ExitNoMatch   = 1
+	ExitError     = 2
+	ExitBecome    = 126
+	ExitInterrupt = 130
 )

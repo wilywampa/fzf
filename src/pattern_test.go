@@ -2,6 +2,7 @@ package fzf
 
 import (
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/junegunn/fzf/src/algo"
@@ -64,10 +65,15 @@ func TestParseTermsEmpty(t *testing.T) {
 	}
 }
 
+func buildPattern(fuzzy bool, fuzzyAlgo algo.Algo, extended bool, caseMode Case, normalize bool, forward bool,
+	withPos bool, cacheable bool, nth []Range, delimiter Delimiter, runes []rune) *Pattern {
+	return BuildPattern(NewChunkCache(), make(map[string]*Pattern),
+		fuzzy, fuzzyAlgo, extended, caseMode, normalize, forward,
+		withPos, cacheable, nth, delimiter, revision{}, runes, nil, 0)
+}
+
 func TestExact(t *testing.T) {
-	defer clearPatternCache()
-	clearPatternCache()
-	pattern := BuildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, true,
+	pattern := buildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, false, true,
 		[]Range{}, Delimiter{}, []rune("'abc"))
 	chars := util.ToChars([]byte("aabbcc abc"))
 	res, pos := algo.ExactMatchNaive(
@@ -81,9 +87,7 @@ func TestExact(t *testing.T) {
 }
 
 func TestEqual(t *testing.T) {
-	defer clearPatternCache()
-	clearPatternCache()
-	pattern := BuildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, true, []Range{}, Delimiter{}, []rune("^AbC$"))
+	pattern := buildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, false, true, []Range{}, Delimiter{}, []rune("^AbC$"))
 
 	match := func(str string, sidxExpected int, eidxExpected int) {
 		chars := util.ToChars([]byte(str))
@@ -98,22 +102,18 @@ func TestEqual(t *testing.T) {
 	}
 	match("ABC", -1, -1)
 	match("AbC", 0, 3)
+	match("AbC  ", 0, 3)
+	match(" AbC ", 1, 4)
+	match("  AbC", 2, 5)
 }
 
 func TestCaseSensitivity(t *testing.T) {
-	defer clearPatternCache()
-	clearPatternCache()
-	pat1 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseSmart, false, true, true, []Range{}, Delimiter{}, []rune("abc"))
-	clearPatternCache()
-	pat2 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseSmart, false, true, true, []Range{}, Delimiter{}, []rune("Abc"))
-	clearPatternCache()
-	pat3 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseIgnore, false, true, true, []Range{}, Delimiter{}, []rune("abc"))
-	clearPatternCache()
-	pat4 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseIgnore, false, true, true, []Range{}, Delimiter{}, []rune("Abc"))
-	clearPatternCache()
-	pat5 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseRespect, false, true, true, []Range{}, Delimiter{}, []rune("abc"))
-	clearPatternCache()
-	pat6 := BuildPattern(true, algo.FuzzyMatchV2, false, CaseRespect, false, true, true, []Range{}, Delimiter{}, []rune("Abc"))
+	pat1 := buildPattern(true, algo.FuzzyMatchV2, false, CaseSmart, false, true, false, true, []Range{}, Delimiter{}, []rune("abc"))
+	pat2 := buildPattern(true, algo.FuzzyMatchV2, false, CaseSmart, false, true, false, true, []Range{}, Delimiter{}, []rune("Abc"))
+	pat3 := buildPattern(true, algo.FuzzyMatchV2, false, CaseIgnore, false, true, false, true, []Range{}, Delimiter{}, []rune("abc"))
+	pat4 := buildPattern(true, algo.FuzzyMatchV2, false, CaseIgnore, false, true, false, true, []Range{}, Delimiter{}, []rune("Abc"))
+	pat5 := buildPattern(true, algo.FuzzyMatchV2, false, CaseRespect, false, true, false, true, []Range{}, Delimiter{}, []rune("abc"))
+	pat6 := buildPattern(true, algo.FuzzyMatchV2, false, CaseRespect, false, true, false, true, []Range{}, Delimiter{}, []rune("Abc"))
 
 	if string(pat1.text) != "abc" || pat1.caseSensitive != false ||
 		string(pat2.text) != "Abc" || pat2.caseSensitive != true ||
@@ -126,9 +126,9 @@ func TestCaseSensitivity(t *testing.T) {
 }
 
 func TestOrigTextAndTransformed(t *testing.T) {
-	pattern := BuildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, true, []Range{}, Delimiter{}, []rune("jg"))
+	pattern := buildPattern(true, algo.FuzzyMatchV2, true, CaseSmart, false, true, false, true, []Range{}, Delimiter{}, []rune("jg"))
 	tokens := Tokenize("junegunn", Delimiter{})
-	trans := Transform(tokens, []Range{Range{1, 1}})
+	trans := Transform(tokens, []Range{{1, 1}})
 
 	origBytes := []byte("junegunn.choi")
 	for _, extended := range []bool{false, true} {
@@ -136,12 +136,12 @@ func TestOrigTextAndTransformed(t *testing.T) {
 		chunk.items[0] = Item{
 			text:        util.ToChars([]byte("junegunn")),
 			origText:    &origBytes,
-			transformed: &trans}
+			transformed: &transformed{pattern.revision, trans}}
 		pattern.extended = extended
-		matches := pattern.matchChunk(&chunk, nil, slab) // No cache
+		matches, _ := pattern.matchChunk(&chunk, nil, slab) // No cache
 		if !(matches[0].item.text.ToString() == "junegunn" &&
 			string(*matches[0].item.origText) == "junegunn.choi" &&
-			reflect.DeepEqual(*matches[0].item.transformed, trans)) {
+			reflect.DeepEqual((*matches[0].item.transformed).tokens, trans)) {
 			t.Error("Invalid match result", matches)
 		}
 
@@ -149,7 +149,7 @@ func TestOrigTextAndTransformed(t *testing.T) {
 		if !(match.item.text.ToString() == "junegunn" &&
 			string(*match.item.origText) == "junegunn.choi" &&
 			offsets[0][0] == 0 && offsets[0][1] == 5 &&
-			reflect.DeepEqual(*match.item.transformed, trans)) {
+			reflect.DeepEqual((*match.item.transformed).tokens, trans)) {
 			t.Error("Invalid match result", match, offsets, extended)
 		}
 		if !((*pos)[0] == 4 && (*pos)[1] == 0) {
@@ -160,15 +160,13 @@ func TestOrigTextAndTransformed(t *testing.T) {
 
 func TestCacheKey(t *testing.T) {
 	test := func(extended bool, patStr string, expected string, cacheable bool) {
-		clearPatternCache()
-		pat := BuildPattern(true, algo.FuzzyMatchV2, extended, CaseSmart, false, true, true, []Range{}, Delimiter{}, []rune(patStr))
+		pat := buildPattern(true, algo.FuzzyMatchV2, extended, CaseSmart, false, true, false, true, []Range{}, Delimiter{}, []rune(patStr))
 		if pat.CacheKey() != expected {
 			t.Errorf("Expected: %s, actual: %s", expected, pat.CacheKey())
 		}
 		if pat.cacheable != cacheable {
 			t.Errorf("Expected: %t, actual: %t (%s)", cacheable, pat.cacheable, patStr)
 		}
-		clearPatternCache()
 	}
 	test(false, "foo !bar", "foo !bar", true)
 	test(false, "foo | bar !baz", "foo | bar !baz", true)
@@ -184,15 +182,13 @@ func TestCacheKey(t *testing.T) {
 
 func TestCacheable(t *testing.T) {
 	test := func(fuzzy bool, str string, expected string, cacheable bool) {
-		clearPatternCache()
-		pat := BuildPattern(fuzzy, algo.FuzzyMatchV2, true, CaseSmart, true, true, true, []Range{}, Delimiter{}, []rune(str))
+		pat := buildPattern(fuzzy, algo.FuzzyMatchV2, true, CaseSmart, true, true, false, true, []Range{}, Delimiter{}, []rune(str))
 		if pat.CacheKey() != expected {
 			t.Errorf("Expected: %s, actual: %s", expected, pat.CacheKey())
 		}
 		if cacheable != pat.cacheable {
 			t.Errorf("Invalid Pattern.cacheable for \"%s\": %v (expected: %v)", str, pat.cacheable, cacheable)
 		}
-		clearPatternCache()
 	}
 	test(true, "foo bar", "foo\tbar", true)
 	test(true, "foo 'bar", "foo\tbar", false)
@@ -203,4 +199,120 @@ func TestCacheable(t *testing.T) {
 	test(false, "foo '", "foo", true)
 	test(false, "foo 'bar", "foo", false)
 	test(false, "foo !bar", "foo", false)
+}
+
+func buildChunks(numChunks int) []*Chunk {
+	chunks := make([]*Chunk, numChunks)
+	words := []string{
+		"src/main/java/com/example/service/UserService.java",
+		"src/test/java/com/example/service/UserServiceTest.java",
+		"docs/api/reference/endpoints.md",
+		"lib/internal/utils/string_helper.go",
+		"pkg/server/http/handler/auth.go",
+		"build/output/release/app.exe",
+		"config/production/database.yml",
+		"scripts/deploy/kubernetes/setup.sh",
+		"vendor/github.com/junegunn/fzf/src/core.go",
+		"node_modules/.cache/babel/transform.js",
+	}
+	for ci := range numChunks {
+		chunks[ci] = &Chunk{count: chunkSize}
+		for i := range chunkSize {
+			text := words[(ci*chunkSize+i)%len(words)]
+			chunks[ci].items[i] = Item{text: util.ToChars([]byte(text))}
+			chunks[ci].items[i].text.Index = int32(ci*chunkSize + i)
+		}
+	}
+	return chunks
+}
+
+func buildPatternWith(cache *ChunkCache, runes []rune) *Pattern {
+	return BuildPattern(cache, make(map[string]*Pattern),
+		true, algo.FuzzyMatchV2, true, CaseSmart, false, true,
+		false, true, []Range{}, Delimiter{}, revision{}, runes, nil, 0)
+}
+
+func TestBitmapCacheBenefit(t *testing.T) {
+	numChunks := 100
+	chunks := buildChunks(numChunks)
+	queries := []string{"s", "se", "ser", "serv", "servi"}
+
+	// 1. Run all queries with shared cache (simulates incremental typing)
+	cache := NewChunkCache()
+	for _, q := range queries {
+		pat := buildPatternWith(cache, []rune(q))
+		for _, chunk := range chunks {
+			pat.Match(chunk, slab)
+		}
+	}
+
+	// 2. GC and measure memory with cache populated
+	runtime.GC()
+	runtime.GC()
+	var memWith runtime.MemStats
+	runtime.ReadMemStats(&memWith)
+
+	// 3. Clear cache, GC, measure again
+	cache.Clear()
+	runtime.GC()
+	runtime.GC()
+	var memWithout runtime.MemStats
+	runtime.ReadMemStats(&memWithout)
+
+	cacheMem := int64(memWith.Alloc) - int64(memWithout.Alloc)
+	t.Logf("Chunks: %d, Queries: %d", numChunks, len(queries))
+	t.Logf("Cache memory: %d bytes (%.1f KB)", cacheMem, float64(cacheMem)/1024)
+	t.Logf("Per-chunk-per-query: %.0f bytes", float64(cacheMem)/float64(numChunks*len(queries)))
+
+	// 4. Verify correctness: cached vs uncached produce same results
+	cache2 := NewChunkCache()
+	for _, q := range queries {
+		pat := buildPatternWith(cache2, []rune(q))
+		for _, chunk := range chunks {
+			pat.Match(chunk, slab)
+		}
+	}
+	for _, q := range queries {
+		patCached := buildPatternWith(cache2, []rune(q))
+		patFresh := buildPatternWith(NewChunkCache(), []rune(q))
+		var countCached, countFresh int
+		for _, chunk := range chunks {
+			countCached += len(patCached.Match(chunk, slab))
+			countFresh += len(patFresh.Match(chunk, slab))
+		}
+		if countCached != countFresh {
+			t.Errorf("query=%q: cached=%d, fresh=%d", q, countCached, countFresh)
+		}
+		t.Logf("query=%q: matches=%d", q, countCached)
+	}
+}
+
+func BenchmarkWithCache(b *testing.B) {
+	numChunks := 100
+	chunks := buildChunks(numChunks)
+	queries := []string{"s", "se", "ser", "serv", "servi"}
+
+	b.Run("cached", func(b *testing.B) {
+		for range b.N {
+			cache := NewChunkCache()
+			for _, q := range queries {
+				pat := buildPatternWith(cache, []rune(q))
+				for _, chunk := range chunks {
+					pat.Match(chunk, slab)
+				}
+			}
+		}
+	})
+
+	b.Run("uncached", func(b *testing.B) {
+		for range b.N {
+			for _, q := range queries {
+				cache := NewChunkCache()
+				pat := buildPatternWith(cache, []rune(q))
+				for _, chunk := range chunks {
+					pat.Match(chunk, slab)
+				}
+			}
+		}
+	})
 }
