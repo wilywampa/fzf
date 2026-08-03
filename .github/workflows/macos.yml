@@ -33,7 +33,7 @@ jobs:
       run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install fish zsh tmux shfmt
 
     - name: Install Ruby gems
-      run: gem install --no-document minitest:5.27.0 rubocop:1.0.0 rubocop-minitest:0.10.1 rubocop-performance:1.8.1
+      run: gem install --no-document minitest:5.27.0 rubocop:1.0.0 rubocop-minitest:0.39.1 rubocop-performance:1.8.1
 
     - name: Rubocop
       run: rubocop --require rubocop-minitest --require rubocop-performance
