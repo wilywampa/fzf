@@ -1,10 +1,11 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
+
 $VERBOSE = nil
 # List files *and* directories using ag
-require 'set'
 dirs = Set.new
 IO.foreach('|ag -g ""') do |line|
   dir = File.dirname(line)
-  puts dir if dir != '.' and dirs.add? dir
+  puts dir if dir != '.' && dirs.add?(dir)
   print line
 end
