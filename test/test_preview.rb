@@ -313,8 +313,8 @@ class TestPreview < TestInteractive
     # Write to the temporary file, and check if the preview window is showing
     # the last line of the file
     tmux.until { |lines| assert_includes lines[1], 'start' }
-    3.times { file.puts _1 } # header lines
-    1000.times { file.puts _1 }
+    3.times { file.puts it } # header lines
+    1000.times { file.puts it }
     tmux.until { |lines| assert_includes lines[1], '/1004' }
     tmux.until { |lines| assert_includes lines[-2], '999' }
 
@@ -548,7 +548,7 @@ class TestPreview < TestInteractive
   def test_change_preview_window_rotate
     tmux.send_keys "seq 100 | #{FZF} --preview-window left,border-none --preview 'echo hello' --bind '" \
                    "a:change-preview-window(right|down|up|hidden|)'", :Enter
-    tmux.until { |lines| assert(lines.any? { _1.include?('100/100') }) }
+    tmux.until { |lines| assert(lines.any? { it.include?('100/100') }) }
     3.times do
       tmux.until { |lines| lines[0].start_with?('hello') }
       tmux.send_keys 'a'

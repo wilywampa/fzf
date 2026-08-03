@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+# rubocop:disable Style/ItBlockParameter
+
 require_relative 'lib/common'
 
 # Testing raw mode
@@ -111,3 +113,5 @@ class TestRaw < TestInteractive
     tmux.until { assert_includes it, '> 999' }
   end
 end
+
+# rubocop:enable Style/ItBlockParameter

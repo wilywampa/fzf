@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+# rubocop:disable Style/ItBlockParameter
+
 require_relative 'lib/common'
 
 # Testing basic features of fzf
@@ -2955,3 +2957,5 @@ class TestCore < TestInteractive
     end
   end
 end
+
+# rubocop:enable Style/ItBlockParameter

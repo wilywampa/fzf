@@ -214,7 +214,7 @@ class Tmux
         if c == "\e" && row[i + 1] == '['
           j = i + 2
           j += 1 while j < len && row[j] != 'm'
-          parts = row[i + 2...j].split(';')
+          parts = row[(i + 2)...j].split(';')
           k = 0
           while k < parts.length
             p = parts[k].to_i

@@ -973,14 +973,14 @@ class TestZsh < TestBase
     tmux.until { |lines| assert_operator lines.match_count, :>, 0 }
     tmux.send_keys :Enter
     tmux.until do |lines|
-      assert_equal 1, lines.count { |l| l.include?('chpwd hook fired') }
+      assert_equal(1, lines.count { |l| l.include?('chpwd hook fired') })
     end
   end
 
   # Helper function to run test with Perl and again with Awk
-  def self.test_perl_and_awk(name, &block)
+  def self.test_perl_and_awk(name, &)
     define_method(:"test_#{name}") do
-      instance_eval(&block)
+      instance_eval(&)
     end
 
     define_method(:"test_#{name}_awk") do
@@ -990,7 +990,7 @@ class TestZsh < TestBase
       tmux.send_keys 'echo ${+commands[perl]}', :Enter
       tmux.until { |lines| assert_equal '0', lines[-1] }
       tmux.prepare
-      instance_eval(&block)
+      instance_eval(&)
     end
   end
 
