@@ -42,4 +42,4 @@ jobs:
       run: make test
 
     - name: Integration test
-      run: make install && ./install --all && LC_ALL=C tmux new-session -d && ruby test/test_go.rb --verbose
+      run: make install && ./install --all && LC_ALL=C tmux new-session -d && ruby test/runner.rb --verbose
