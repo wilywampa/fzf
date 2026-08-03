@@ -27,13 +27,13 @@ jobs:
     - name: Setup Ruby
       uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
       with:
-        ruby-version: 3.1.0
+        ruby-version: 3.4.6
 
     - name: Install packages
       run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install fish zsh tmux shfmt
 
     - name: Install Ruby gems
-      run: gem install --no-document minitest:5.14.2 rubocop:1.0.0 rubocop-minitest:0.10.1 rubocop-performance:1.8.1
+      run: gem install --no-document minitest:5.27.0 rubocop:1.0.0 rubocop-minitest:0.39.1 rubocop-performance:1.8.1
 
     - name: Rubocop
       run: rubocop --require rubocop-minitest --require rubocop-performance
