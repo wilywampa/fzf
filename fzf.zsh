@@ -9,7 +9,9 @@ fi
 [[ -z $FZF_DEFAULT_OPTS ]] && export FZF_DEFAULT_OPTS="+c -m"
 
 __fzfcmd() {
-  (( ${FZF_TMUX:-$+commands[fzf-tmux]} )) && echo "fzf-tmux -d${FZF_TMUX_HEIGHT:-40%}" || echo "fzf"
+  (( ${FZF_TMUX:-$+commands[fzf-tmux]} )) && \
+    echo "fzf-tmux -p ${FZF_TMUX_WIDTH:-50%},${FZF_TMUX_HEIGHT:-50%}" || \
+    echo "fzf"
 }
 
 # Key bindings
@@ -81,7 +83,7 @@ _add_recent_dir() {
 # ALT-C - cd into the selected directory
 fzf-cd-widget() {
   cd "${$(set -o nonomatch; command find * -path '*/\.*' -prune \
-          -o -type d -print 2> /dev/null | fzf):-.}"
+          -o -type d -print 2> /dev/null | $(__fzfcmd)):-.}"
   _add_recent_dir
   zle reset-prompt
 }
@@ -94,7 +96,7 @@ fzf-history-widget() {
     | LC_ALL='C' sort -k 2 -r                \
     | LC_ALL='C' uniq -f 1                   \
     | LC_ALL='C' sort -n                     \
-    | fzf +s +m -n..,1,2..)
+    | $(__fzfcmd) +s +m -n..,1,2..)
   if [[ -n $newbuffer ]]; then
     BUFFER=
     zle vi-fetch-history -n ${newbuffer[(w)1]%%\*}
@@ -106,7 +108,7 @@ zle     -N   fzf-history-widget
 
 # ALT-R - Paste the selected command from directory history into the command line
 fzf-dir-history-widget() {
-  newbuffer=$(dirhist $PWD | fzf +s +m)
+  newbuffer=$(dirhist $PWD | $(__fzfcmd) +s +m)
   lines=(${(s:\\n:)newbuffer})
   if [[ ${#lines} -eq 1 ]]; then
     LBUFFER=$newbuffer
@@ -144,7 +146,7 @@ bindkey '^R' fzf-combined-widget
 fzf-recent-directory-widget() {
   # Read file $HOME/.chpwd-recent-dirs removing one level of quoting, remove
   # the line with $PWD, then combine into one directory per line of text
-  local dir="$(echo ${(F)${${(fOaQ)mapfile[$HOME/.chpwd-recent-dirs]}/#%$PWD}} | fzf +s)"
+  local dir="$(echo ${(F)${${(fOaQ)mapfile[$HOME/.chpwd-recent-dirs]}/#%$PWD}} | $(__fzfcmd) +s)"
   if [[ $WIDGET == fzf-recent-directory-widget ]]; then
     cd ${dir:-.}
     _add_recent_dir
@@ -199,7 +201,7 @@ fzf-window-words-widget() {
   LC_ALL='C' awk '{ print length(), $0 | "sort -n" }' |
   LC_ALL='C' awk '{ print $2 }' |
   LC_ALL='C' uniq |
-  fzf --no-sort --multi )
+  $(__fzfcmd) --no-sort --multi )
   LBUFFER=${LBUFFER}${(j: :)${(f)result}}
   zle redisplay
 }
