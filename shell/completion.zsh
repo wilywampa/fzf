@@ -378,7 +378,7 @@ _fzf_complete_kill() {
   '
   _fzf_complete -m --header-lines=1 --no-preview --wrap --color fg:dim,nth:regular \
     --bind "click-header:transform:$transformer" -- "$@" < <(
-    command ${FZF_PS_COMMAND:-{ps,-eo,"user,pid,ppid,start,time,command"}} 2> /dev/null ||
+    command ps -eo user,pid,ppid,start,time,command 2> /dev/null ||
       command ps -eo user,pid,ppid,time,args 2> /dev/null || # For BusyBox
       command ps --everyone --full --windows # For cygwin
   )
