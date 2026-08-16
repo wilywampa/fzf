@@ -157,7 +157,7 @@ fzf-recent-directory-widget() {
 }
 zle     -N  fzf-recent-directory-widget
 bindkey 'ä' fzf-recent-directory-widget  # <M-d>
-zle     -N  fzf-recent-directory-insert-widget
+zle     -N  fzf-recent-directory-insert-widget fzf-recent-directory-widget
 bindkey 'Ä' fzf-recent-directory-insert-widget  # <M-D>
 
 # ALT-D - open file from neomru
