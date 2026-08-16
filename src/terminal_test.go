@@ -223,7 +223,7 @@ func TestReplacePlaceholder(t *testing.T) {
 	// while the double q is invalid, it is useful here for testing purposes
 	templateToOutput[`{q}`] = "{{.O}}" + query + "{{.O}}"
 	templateToOutput[`{fzf:query}`] = "{{.O}}" + query + "{{.O}}"
-	templateToOutput[`{fzf:action} {fzf:prompt}`] = "backward-delete-char-eof 'prompt'"
+	templateToOutput[`{fzf:action} {fzf:prompt}`] = `backward-delete-char-eof {{.O}}prompt{{.O}}`
 
 	// IV. escaping placeholder
 	templateToOutput[`\{}`] = `{}`
@@ -251,9 +251,9 @@ func TestReplacePlaceholder(t *testing.T) {
 }
 
 func TestQuoteEntry(t *testing.T) {
-	type quotes struct{ E, O, SQ, DQ, BS string } // standalone escape, outer, single and double quotes, backslash
-	unixStyle := quotes{``, `'`, `'\''`, `"`, `\`}
-	windowsStyle := quotes{`^`, `^"`, `'`, `\^"`, `\\`}
+	type quotes struct{ E, O, SQ, DQ, BS, PB string } // standalone escape, outer, single and double quotes, doubled and plain backslash
+	unixStyle := quotes{``, `'`, `'\''`, `"`, `\`, `\`}
+	windowsStyle := quotes{`^`, `^"`, `'`, `\^"`, `\\`, `\`}
 	var effectiveStyle quotes
 	exec := util.NewExecutor("")
 
@@ -280,13 +280,13 @@ func TestQuoteEntry(t *testing.T) {
 		`>`:                       `{{.O}}{{.E}}>{{.O}}`,
 		`(`:                       `{{.O}}{{.E}}({{.O}}`,
 		`)`:                       `{{.O}}{{.E}}){{.O}}`,
-		`@`:                       `{{.O}}{{.E}}@{{.O}}`,
+		`@`:                       `{{.O}}@{{.O}}`,
 		`^`:                       `{{.O}}{{.E}}^{{.O}}`,
 		`%`:                       `{{.O}}{{.E}}%{{.O}}`,
 		`!`:                       `{{.O}}{{.E}}!{{.O}}`,
 		`%USERPROFILE%`:           `{{.O}}{{.E}}%USERPROFILE{{.E}}%{{.O}}`,
-		`C:\Program Files (x86)\`: `{{.O}}C:{{.BS}}Program Files {{.E}}(x86{{.E}}){{.BS}}{{.O}}`,
-		`"C:\Program Files"`:      `{{.O}}{{.DQ}}C:{{.BS}}Program Files{{.DQ}}{{.O}}`,
+		`C:\Program Files (x86)\`: `{{.O}}C:{{.PB}}Program Files {{.E}}(x86{{.E}}){{.BS}}{{.O}}`,
+		`"C:\Program Files"`:      `{{.O}}{{.DQ}}C:{{.PB}}Program Files{{.DQ}}{{.O}}`,
 	}
 
 	for input, expected := range tests {
@@ -440,7 +440,7 @@ func TestPowershellCommands(t *testing.T) {
 		// to explorer, which will prompt user to pick editing program for the fzf-preview file
 		// the temp file contains: `cat "C:\test.txt"`
 		// TODO this should actually work
-		{give{`powershell -NoProfile -Command {f}`, ``, newItems(`cat "C:\test.txt"`)}, want{match: `^powershell -NoProfile -Command .*\fzf-preview-[0-9]{9}$`}},
+		{give{`powershell -NoProfile -Command {f}`, ``, newItems(`cat "C:\test.txt"`)}, want{match: `^powershell -NoProfile -Command .*\fzf-temp-[0-9]+$`}},
 	}
 
 	// to force powershell-style escaping we temporarily set environment variable that fzf honors
@@ -849,5 +849,75 @@ func TestWordWrapAnsiLine(t *testing.T) {
 	result = term.wordWrapAnsiLine("hello\tworld", 12, 2)
 	if len(result) != 2 || result[0] != "hello" || result[1] != "world" {
 		t.Errorf("Tab wrap: %q", result)
+	}
+}
+
+func TestSplitOnIND(t *testing.T) {
+	term := &Terminal{tabstop: 8}
+	for _, tc := range []struct {
+		name string
+		line string
+		want []string
+	}{
+		{
+			// Nothing to do, so the caller keeps the line as it read it
+			name: "no IND",
+			line: "foo\n",
+			want: nil,
+		},
+		{
+			// chafa: CUB returns to the column the row started on
+			name: "rows at column 0",
+			line: "AAA\x1b[3D\x1bDBBB\x1b[3D\x1bDCCC\n",
+			want: []string{"AAA\x1b[3D\n", "BBB\x1b[3D\n", "CCC\n"},
+		},
+		{
+			// 'printf "  "; chafa ...'
+			name: "indented rows",
+			line: "  AAA\x1b[3D\x1bDBBB\x1b[3D\x1bDCCC\n",
+			want: []string{"  AAA\x1b[3D\n", "  BBB\x1b[3D\n", "  CCC\n"},
+		},
+		{
+			name: "tab indent expands to the tab stop",
+			line: "\tAAA\x1b[3D\x1bDBBB\x1b[3D\x1bDCCC\n",
+			want: []string{"\tAAA\x1b[3D\n", "        BBB\x1b[3D\n", "        CCC\n"},
+		},
+		{
+			// IND on its own keeps the column
+			name: "bare IND",
+			line: "AB\x1bDCD\n",
+			want: []string{"AB\n", "  CD\n"},
+		},
+		{
+			name: "CUB without a parameter moves back one",
+			line: "AB\x1b[D\x1bDCD\n",
+			want: []string{"AB\x1b[D\n", " CD\n"},
+		},
+		{
+			name: "CUB past the left edge is clamped",
+			line: "AB\x1b[9D\x1bDCD\n",
+			want: []string{"AB\x1b[9D\n", "CD\n"},
+		},
+		{
+			name: "SGR codes take no column",
+			line: "\x1b[31mAB\x1b[m\x1b[2D\x1bDCD\n",
+			want: []string{"\x1b[31mAB\x1b[m\x1b[2D\n", "CD\n"},
+		},
+		{
+			name: "pass-throughs take no column",
+			line: "\x1b_Ga=T,c=2,r=1\x1b\\AB\x1b[2D\x1bDCD\n",
+			want: []string{"\x1b_Ga=T,c=2,r=1\x1b\\AB\x1b[2D\n", "CD\n"},
+		},
+	} {
+		got := term.splitOnIND(tc.line)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+			continue
+		}
+		for idx, line := range got {
+			if line != tc.want[idx] {
+				t.Errorf("%s: line %d: got %q, want %q", tc.name, idx, line, tc.want[idx])
+			}
+		}
 	}
 }
