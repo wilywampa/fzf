@@ -55,4 +55,4 @@ jobs:
         go test ./src/algo/ -fuzz=FuzzLastIndexByteTwo -fuzztime=5s
 
     - name: Integration test
-      run: make install && ./install --all && tmux new-session -d && ruby test/runner.rb --verbose
+      run: make install && ./install --all && tmux new-session -d && bash -l -c "ruby test/runner.rb --verbose"
