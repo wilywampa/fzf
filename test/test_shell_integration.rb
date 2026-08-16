@@ -1240,7 +1240,10 @@ class TestNushell < TestBase
 
     # Multi-selection
     tmux.send_keys "cat /tmp/fzf-test/10#{trigger}", :Tab
-    tmux.until { |lines| assert_equal 2, lines.match_count }
+    tmux.until do |lines|
+      puts "DEBUG LINES IN TMUX: #{lines.to_a}" # This will output to your GitHub Actions log
+      assert_equal 2, lines.match_count
+    end
     tmux.send_keys :Tab, :Tab
     tmux.until { |lines| assert_equal 2, lines.select_count }
     tmux.send_keys :Enter
