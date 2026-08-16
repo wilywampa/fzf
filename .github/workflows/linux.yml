@@ -55,4 +55,11 @@ jobs:
         go test ./src/algo/ -fuzz=FuzzLastIndexByteTwo -fuzztime=5s
 
     - name: Integration test
-      run: make install && ./install --all && tmux new-session -d && bash -l -c "ruby test/runner.rb --verbose"
+      env: PATH: ${{ github.workspace }}/bin:${{ env.PATH }}
+      run: |
+        mkdir -p ~/.config/nushell
+        echo '$env.config = { enable_external_completion: true }' >> ~/.config/nushell/config.nu
+        make install
+        ./install --all
+        tmux new-session -d
+        bash -l -c "ruby test/runner.rb --verbose"
