@@ -56,7 +56,7 @@ jobs:
 
     - name: Integration test
       run: |
-        export PATH="${{ github.workspace }}/bin:/home/runner/.fzf/bin:${{ env.PATH }}"
+        export PATH="${{ github.workspace }}/bin:/home/runner/.fzf/bin:$PATH"
         mkdir -p ~/.config/nushell
         sudo chown -R $USER:$USER ~/.config
         echo '$env.config = { enable_external_completion: true }' >> ~/.config/nushell/config.nu
