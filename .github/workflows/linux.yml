@@ -62,7 +62,6 @@ jobs:
         echo '$env.config = { enable_external_completion: true }' >> ~/.config/nushell/config.nu
         make install
         ./install --all
-        tmux set-environment -g PATH "$PATH"
         tmux new-session -d -e PATH="$PATH"
         tmux set-environment -g PATH "$PATH"
         ruby test/runner.rb --verbose
