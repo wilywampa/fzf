@@ -1239,6 +1239,9 @@ class TestNushell < TestBase
     tmux.prepare
 
     # Multi-selection
+    Dir.children('/tmp/fzf-test').each do |filename|
+      puts filename
+    end
     tmux.send_keys "cat /tmp/fzf-test/10#{trigger}", :Tab
     tmux.until do |lines|
       puts "DEBUG LINES IN TMUX: #{lines.to_a}" # This will output to your GitHub Actions log
