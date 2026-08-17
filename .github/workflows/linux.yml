@@ -55,9 +55,8 @@ jobs:
         go test ./src/algo/ -fuzz=FuzzLastIndexByteTwo -fuzztime=5s
 
     - name: Integration test
-      env:
-        PATH: ${{ github.workspace }}/bin:${{ env.PATH }}
       run: |
+        export PATH="${{ github.workspace }}/bin:$PATH"
         mkdir -p ~/.config/nushell
         echo '$env.config = { enable_external_completion: true }' >> ~/.config/nushell/config.nu
         make install
